@@ -1,0 +1,22 @@
+{
+  "name": "zmdj",
+  "version": "1.0.0",
+  "private": true,
+  "description": "阵面对决 · 测试台（本地对局测试服务）",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc && node dist/server.js",
+    "params": "node dist/tools/engine-params.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

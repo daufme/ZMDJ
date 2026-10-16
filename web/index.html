@@ -1,0 +1,2068 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阵面对决 · 测试台</title>
+<style>
+  :root{
+    --mat:#7a4f26; --mat2:#93602f; --line:#5b3c1c;
+    --ink:#2b1c0e; --cream:#f7f1e2; --cream2:#eee4cf;
+    --p0:#2f7d4f; --p1:#a83232; --accent:#ffd479; --dim:#d8c39a; --bad:#e07070;
+
+    --卡比: 484 / 682;
+    --卡高-阵地: clamp(76px, 8.6vh, 116px);
+    --卡高-区域: clamp(84px, 10.2vh, 138px);
+    --卡高-堆叠: clamp(48px, 6.2vh, 84px);
+    --卡高-查看: clamp(104px, 14vh, 176px);
+
+    --侧栏宽: clamp(92px, 8.6vw, 132px);
+
+    --左栏宽: clamp(126px, 11vw, 196px);
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; overflow:hidden; }
+  body{ margin:0; color:#f3ead8; font:12px/1.4 "Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+        background:radial-gradient(circle at 30% -10%, #57351a, #241407 65%) #241407; }
+
+  #app{ height:calc(100vh / var(--缩放, 1)); display:flex; flex-direction:column; padding:6px 8px; gap:6px; }
+
+#转屏提示{ display:none; position:fixed; inset:0; z-index:99; background:var(--panel);
+  color:var(--ink); align-items:center; justify-content:center; text-align:center; font-size:20px; line-height:1.8; }
+body.竖屏 #转屏提示{ display:flex; }
+
+@media (max-width:820px){
+  .viewer{ padding:6px !important; }
+  .opbar{ padding:4px 6px !important; gap:4px !important; }
+  .act{ padding:3px 6px !important; font-size:12px !important; }
+}
+
+  button{ background:linear-gradient(#8a5a28,#633d16); color:#fff3dd; border:1px solid #a8834a;
+          border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit;
+          box-shadow:0 1px 2px rgba(0,0,0,.35); }
+  button:hover{ border-color:var(--accent); color:#fff; background:linear-gradient(#9a6630,#70461a); }
+  button:hover{ border-color:var(--accent); color:var(--accent); }
+  button.on{ border-color:#ffe9a8; color:#2b1c0e; background:linear-gradient(#ffd479,#e8b455); font-weight:700; }
+  .dim{ color:var(--dim); }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+
+  .topbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; min-height:28px; flex:none;
+           background:linear-gradient(#4a2d14,#331e0c); border:1px solid var(--line);
+           border-radius:6px; padding:3px 8px; font-size:11px; }
+  .topbar b{ color:var(--accent); font-size:12px; }
+  .topbar .spacer{ flex:1; }
+  header{ display:flex; gap:10px; align-items:center; height:30px; flex:none;
+          background:linear-gradient(#4a2d14,#331e0c); border:1px solid var(--line);
+          border-radius:6px; padding:0 10px; }
+  header b{ color:var(--accent); font-size:13px; }
+  header .spacer{ flex:1; }
+
+  .wrap{ flex:1; display:grid; grid-template-columns:var(--左栏宽) 1fr 330px; gap:8px; min-height:0;
+         position:relative; }
+
+  .leftcol{ display:flex; flex-direction:column; gap:6px; min-height:0; }
+  .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }
+  .leftcol .sharedbox{ flex:none; flex-direction:column; align-items:flex-start; gap:2px; }
+  .leftcol .stackrow{ flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; margin-bottom:0; }
+  .leftcol .stackrow .row{ flex-wrap:wrap; align-content:flex-start; overflow-y:auto; overflow-x:hidden; }
+
+  .stackrow .empty{ color:#b8a37c; font-size:10.5px; padding:3px 2px; }
+
+  .cap{ display:block; width:100%; box-sizing:border-box; padding:3px 5px; border:1px solid #7a5a2a;
+        border-radius:4px; background:linear-gradient(#4a3418,#33230f); color:#e8d9b4; font-size:10px;
+        line-height:1.3; word-break:break-all; }
+  .cap.候选{ cursor:pointer; filter:brightness(1.3); border-color:var(--accent); }
+  .cap.选好{ outline:2px solid var(--accent); outline-offset:1px; filter:brightness(1.25); }
+  .board{ display:flex; flex-direction:column; min-height:0; position:relative; }
+
+  .stackrow{ background:linear-gradient(160deg,#3a2a16,#2b1d10); border:2px solid #7a5a2a; border-radius:6px;
+             padding:2px 6px 4px; margin-bottom:4px; flex:none; }
+  .stackrow .row{ display:flex; gap:6px; align-items:flex-start; min-height:40px; }
+  .stackrow .card{ height:var(--卡高-堆叠); }
+
+  .half{ background:linear-gradient(160deg,var(--mat2),var(--mat)); border:2px solid #3d230e;
+         padding:3px 8px; display:grid; gap:3px 8px; min-height:0; flex:1 1 auto;
+         align-content:stretch; overflow:hidden; }
+
+  .half > *{ min-height:0; }
+
+  .half.opp{ grid-template-rows:auto auto 1fr; }
+  .half.me{ grid-template-rows:1fr auto auto auto; }
+  .half.me{ grid-template-columns:1fr var(--侧栏宽); border-radius:0 0 8px 8px; border-top:1px dashed rgba(255,255,255,.18); }
+  .half.opp{ grid-template-columns:var(--侧栏宽) 1fr; border-radius:8px 8px 0 0; border-bottom:none; }
+
+  .mid2{ display:grid; grid-template-columns:1fr 1fr; gap:6px; min-width:0; align-content:stretch; }
+  .mid2 > *{ display:flex; flex-direction:column; }
+  .mid2 .zone{ flex:1; }
+  .mid2 > *{ min-width:0; }
+  .half > *{ min-width:0; }
+  .zlabel{ color:#40280f; font-size:10px; letter-spacing:.1em; font-weight:700; }
+
+  .zone{ background:rgba(64,40,15,.16); border:1px dashed rgba(64,40,15,.5); border-radius:5px; padding:2px;
+         display:flex; flex-direction:column; min-height:calc(var(--卡高-区域) + 12px); }
+  .zone .row{ display:flex; gap:12px; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+              flex:1; align-items:flex-start; }
+
+  .zone .row{ scrollbar-width:none; }
+  .zone .row::-webkit-scrollbar{ display:none; }
+  .empty{ color:rgba(64,40,15,.65); font-size:10px; }
+
+  .slots{ display:grid; grid-template-columns:repeat(5,1fr); gap:clamp(4px, .8vw, 10px);
+          grid-auto-rows:1fr; align-content:stretch;
+
+          height:100%; }
+  .slot{ background:rgba(64,40,15,.16); border:1px dashed rgba(64,40,15,.5); border-radius:5px;
+         box-sizing:border-box;
+         height:100%; min-height:calc(var(--卡高-阵地) + 8px);
+         display:flex; align-items:center; justify-content:center; padding:2px; }
+
+  .slotwrap{ min-width:0; }
+  .slotwrap > .slot{ width:100%; }
+  .slot .vn{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+             color:rgba(64,40,15,.55); font-size:11px; font-weight:700; letter-spacing:.1em;
+             pointer-events:none; }
+
+  .slot .slotcard{ position:relative; z-index:1; display:flex; height:100%;
+                   align-items:center; justify-content:center; }
+  .slot{ position:relative; }
+  .slotname{ display:none; }
+
+  .card{ position:relative; overflow:hidden; cursor:pointer;
+         height:var(--卡高-区域); width:auto; aspect-ratio:var(--卡比); flex:0 0 auto;
+         border:2px solid var(--line); border-radius:5px;
+         background:repeating-linear-gradient(45deg,#c9bb9a,#c9bb9a 6px,#d8cdb0 6px,#d8cdb0 12px); }
+  .card.p0{ border-color:var(--p0); }
+
+  .card.back{ background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center;
+              cursor:default; border-color:#4a3a22; }
+  .card.back:hover{ filter:none; }
+  .card.p1{ border-color:var(--p1); }
+  .card.sel{ outline:2px solid var(--accent); outline-offset:1px; }
+
+  .card.候选{ cursor:pointer; filter:brightness(1.18); }
+
+  .slot.候选{ cursor:pointer; outline:2px dashed var(--accent); outline-offset:2px; filter:brightness(1.2); }
+  .slot.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
+
+  .card.选好{ outline:2px solid var(--accent); outline-offset:-2px; filter:brightness(1.25); }
+
+  .board.选择中 .card:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
+
+  .board.选择中 .pile:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
+  .board.选择中 .cap:not(.候选):not(.选好){ opacity:.4; }
+
+  .card.isTapped{ transform: rotate(90deg) scale(0.82); margin: 0 5px; }
+
+  .half.有可用 .card{ transition: filter .12s; }
+
+  .half.有可用 .card:not(.可用):not(.候选):not(.选好){ filter: brightness(.5) saturate(.65); }
+
+  .vgrid .card, .vgrid .card:not(.可用){ filter: none; }
+  .row .card{ height:var(--卡高-区域); }
+
+  .slot .card{ height:100%; max-height:100%; }
+
+  .card .art{ position:absolute; inset:0; background-size:cover; background-position:center; }
+  .card .cst, .card .fac, .card .pt, .card .dmg{
+    position:absolute; border-radius:3px; padding:0 3px; font-size:9px; font-weight:700;
+    background:rgba(0,0,0,.66); color:#ffe9b0; text-shadow:0 1px 2px rgba(0,0,0,.9); }
+
+  .card .fac{ top:1px; left:1px; background:rgba(24,14,6,.8); color:#ffd479; }
+  .card .cst{ top:1px; right:1px; }
+
+  .card .pt{ bottom:34px; right:3px; z-index:5; }
+  .card .dmg{ bottom:1px; left:1px; color:#ff9d9d; }
+  .card .plate{ position:absolute; left:0; right:0; bottom:0; padding:12px 3px 2px;
+                background:linear-gradient(transparent, rgba(0,0,0,.55) 30%, rgba(0,0,0,.86)); }
+  .card .nm{ font-size:9.5px; font-weight:700; line-height:1.15; color:#fff;
+             text-shadow:0 1px 2px #000; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .ty{ font-size:8px; color:#e3d6bb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .tags{ display:flex; gap:2px; flex-wrap:wrap; margin-top:1px; }
+
+  .card .pt{ font-size:13px; font-weight:800; color:#fff8e6; background:rgba(18,10,4,.92);
+             border:1px solid #c9a05a; border-radius:9px; padding:1px 7px; line-height:18px;
+             text-shadow:0 1px 3px #000; box-shadow:0 2px 6px rgba(0,0,0,.8); }
+
+  .card .pt b{ font-weight:800; }
+  .card .pt b.up{ color:#8cf0a8; }
+  .card .pt b.dn{ color:#ff9d9d; }
+  .card .pt b.hurt{ color:#fff; background:#a3232b; border:1px solid #ff8a8a;
+                    border-radius:8px; padding:0 4px; margin-left:3px; font-size:11px; }
+
+  .card .mk{ position:absolute; top:20px; left:2px; z-index:4; display:flex; flex-direction:column; gap:2px; }
+  .card .mk span{ background:#4a2f6b; border:1px solid #c79fe0; color:#f3e8ff; font-weight:800;
+                  border-radius:9px; padding:0 5px; font-size:10px; line-height:14px;
+                  box-shadow:0 1px 4px rgba(0,0,0,.7); }
+  .card .tag{ background:rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.35); color:#fff;
+              border-radius:2px; padding:0 2px; font-size:8px; }
+  .card .tag.kw{ background:rgba(140,90,32,.85); border-color:#ffd479; color:#ffe9c0; }
+  .zoneboxrow{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .zonebox.backimg{ background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center; }
+  .zonebox{ position:relative; height:100%; max-height:62px; width:auto; aspect-ratio:484/682; border:2px solid var(--line); border-radius:5px; cursor:pointer;
+            display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+            background:repeating-linear-gradient(45deg,#4a2d14,#4a2d14 5px,#3a2410 5px,#3a2410 10px); }
+  .zonebox:hover{ border-color:var(--accent); }
+  .zonebox.deck{ background:repeating-linear-gradient(135deg,#2a3a5a,#2a3a5a 5px,#1e2a42 5px,#1e2a42 10px); }
+  .zonebox .zb-label{ font-size:9px; color:var(--dim); }
+  .zonebox .zb-count{ font-size:14px; font-weight:700; color:#f3ead8; }
+  .sharedbox{ display:flex; align-items:center; gap:8px; cursor:pointer; border:1px solid var(--line);
+              border-radius:5px; padding:3px 8px; background:linear-gradient(#3a2410,#2c1a0a); flex:none; }
+  .sharedbox:hover{ border-color:var(--accent); }
+  .sharedbox b{ color:#f3ead8; }
+
+  .viewers{ position:absolute; top:6%; right:calc(330px + 8px); width:min(46%, 560px); max-height:84%;
+            z-index:20; display:flex; flex-direction:column; gap:8px; overflow:auto; }
+  .viewer{ max-height:70vh; padding:10px 12px; border-radius:8px; border:1px solid #8a6a3a;
+           background:rgba(12,6,2,.94);
+           display:flex; flex-direction:column; gap:8px; }
+  .viewer .vhead{ display:flex; gap:10px; align-items:center; flex:none; }
+  .viewer .vgrid{ flex:1; overflow:auto; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; }
+  .viewer .card{ height:var(--卡高-查看); }
+  .viewer .pickable{ display:inline-block; }
+
+  .viewer .pickable.压黑 .card{ filter: brightness(.42) grayscale(.7); }
+
+  .cardback{ height:var(--卡高-查看); width:auto; aspect-ratio:var(--卡比); border-radius:5px; border:2px solid #1e2a42;
+             background:repeating-linear-gradient(135deg,#2a3a5a,#2a3a5a 6px,#1e2a42 6px,#1e2a42 12px); }
+  .prewrap{ flex:1; overflow:auto; }
+  .prebox{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
+           padding:10px 12px; margin-bottom:8px; }
+  .pile{ display:flex; justify-content:space-between; align-items:baseline; border-radius:3px;
+         padding:0 5px; margin-bottom:1px; background:linear-gradient(#3a2410,#2a190a);
+         border:1px solid var(--line); color:var(--dim); font-size:10px; line-height:1.25; }
+  .pile b{ font-size:11px; color:#f3ead8; }
+
+  .pile.候选{ cursor:pointer; outline:2px dashed var(--accent); outline-offset:2px; filter:brightness(1.2); }
+  .pile.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
+  .track{ display:flex; align-items:center; background:linear-gradient(#e6d7b4,#d6c297);
+          border:1px solid #4a2c12; border-radius:4px; padding:1px 4px; height:16px; }
+  .track .tlabel{ color:#40280f; font-size:9px; font-weight:700; padding:0 5px; white-space:nowrap; }
+  .track .cell{ flex:1; position:relative; text-align:center; border-left:1px solid rgba(64,40,15,.25); min-width:0; }
+  .track .cell b{ color:#5a4020; font-size:8px; font-weight:400; }
+  .track .cell i{ display:block; height:5px; margin:0 1px; border-radius:1px; opacity:.1; }
+  .track .cell i.p0{ background:var(--p0); }
+  .track .cell i.p1{ background:var(--p1); }
+
+  .opbar{ grid-column:1/-1; min-height:32px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+          overflow-x:auto; background:linear-gradient(#4a2d14,#331e0c);
+          border:1px solid var(--accent); border-radius:6px; padding:3px 8px; }
+  .opbar.off{ border-color:var(--line); background:transparent; }
+  .opbar::-webkit-scrollbar{ height:5px; }
+  .opbar::-webkit-scrollbar-thumb{ background:#5b3c1c; border-radius:3px; }
+  .opbar .who{ color:var(--accent); font-weight:700; white-space:nowrap; }
+
+  .opbar .turninfo{ color:#ffe9b0; font-weight:700; white-space:nowrap;
+                    background:rgba(24,14,6,.85); border:1px solid #a8834a; border-radius:9px; padding:0 6px; }
+  .opbar .turninfo b{ color:#fff; }
+  .opbar .notyours{ color:#ffb0b0; font-weight:400; }
+
+  .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }
+  .detail{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
+           padding:6px 8px; height:64%; display:flex; flex-direction:column; gap:4px; overflow:hidden; }
+  .detail .dhead{ flex:none; }
+  .detail .dname{ font-size:13px; font-weight:700; color:var(--accent); }
+  .detail .dmeta{ color:var(--dim); font-size:10.5px; }
+  .detail .dbox{ flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
+                 background:#1d1207; border:1px solid var(--line); border-radius:4px; overflow:hidden; }
+  .detail .dbox img{ max-width:100%; max-height:100%; aspect-ratio:484/682; object-fit:contain; }
+  .detail .dtext{ flex:none; height:104px; overflow:auto; background:#1d1207; border:1px solid var(--line);
+                  border-radius:4px; padding:4px 6px; white-space:pre-wrap; font-size:11px; color:#e8dcc2; }
+  .logbox{ flex:1; min-height:70px; overflow:auto; background:#1a0f06; border:1px solid var(--line);
+           border-radius:6px; padding:6px 8px; font-size:11px; white-space:pre-wrap; color:#d9c9a8; }
+  .sel{ background:#4a2d14; color:#f3ead8; border:1px solid var(--line); border-radius:4px; padding:2px 4px; font:inherit; }
+
+  .poolcard{ margin:2px; font-size:11px; }
+  .deckwrap{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }
+  .deckwrap.单列{ grid-template-columns:1fr; }
+  .deckcol{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line);
+            border-radius:6px; padding:7px; max-height:56vh; overflow:auto; }
+  .deckrow{ display:flex; justify-content:space-between; align-items:center; gap:6px; }
+
+.组牌wrap{ grid-template-columns:var(--左栏宽) 1fr 330px; }
+
+.组牌wrap .detail{ height:auto; flex:1; min-height:0; }
+
+.组牌wrap .detail .dbox{ flex:none; aspect-ratio:484/682; }
+.组牌wrap .detail .dtext{ flex:1; height:auto; min-height:104px; }
+.deckmain{ display:flex; flex-direction:column; gap:6px; min-height:0; }
+
+.deckwrap{ flex:none; }
+.deckgrid{ display:flex; flex-wrap:wrap; gap:4px; align-content:flex-start; overflow-y:auto;
+  flex:none; height:30vh; }
+.thumb{ position:relative; width:62px; aspect-ratio:484/682; border-radius:3px; cursor:pointer;
+  background:#1d1207 center/cover; border:1px solid var(--line); flex:none; }
+.thumb img{ width:100%; height:100%; object-fit:cover; border-radius:2px; display:block; }
+.thumb .n{ position:absolute; right:0; bottom:0; background:rgba(18,10,4,.92); color:#ffe9c0;
+  font-size:10px; font-weight:800; padding:0 3px; border-radius:2px 0 0 0; }
+.thumb:hover{ border-color:var(--accent); filter:brightness(1.15); }
+
+.poolgrid.图{ display:flex; flex-wrap:wrap; gap:4px; overflow-y:auto; flex:1; min-height:0;
+  max-height:none; align-content:flex-start; }
+.poolitem{ position:relative; width:74px; aspect-ratio:484/682; border-radius:3px; cursor:pointer;
+  background:#1d1207 center/cover; border:1px solid var(--line); flex:none; }
+.poolitem img{ width:100%; height:100%; object-fit:cover; border-radius:2px; display:block; }
+.poolitem:hover{ border-color:var(--accent); filter:brightness(1.18); }
+.poolitem .cnt{ position:absolute; left:0; top:0; background:rgba(18,10,4,.92); color:#8cf0a8;
+  font-size:10px; font-weight:800; padding:0 3px; border-radius:0 0 2px 0; }
+.poolitem .none{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  color:var(--dim); font-size:9px; text-align:center; padding:2px;
+  background:repeating-linear-gradient(45deg,#241708,#241708 6px,#1d1207 6px,#1d1207 12px); }
+
+.filters{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
+  padding:6px; display:flex; flex-direction:column; gap:5px; font-size:11px; flex:none; }
+.filters label{ color:var(--dim); display:block; margin-bottom:2px; }
+.filters select, .filters input{ width:100%; background:#1d1207; color:#f0e2c6;
+  border:1px solid var(--line); border-radius:4px; padding:3px 4px; font-size:11px; }
+.势力钮{ display:flex; flex-wrap:wrap; gap:3px; }
+.势力钮 button{ padding:2px 6px; font-size:11px; }
+.势力钮 button.on{ background:linear-gradient(#9a6630,#70461a); border-color:var(--accent); color:#fff; }
+.poolgrid{ display:flex; flex-wrap:wrap; gap:4px; max-height:24vh; overflow:auto;
+             background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px; padding:6px; }
+  #错误{ position:fixed; right:12px; bottom:12px; background:#3a1f1f; border:1px solid var(--bad);
+         color:#ffd9d9; padding:8px 12px; border-radius:6px; display:none; max-width:380px; z-index:9; }
+
+  .大厅{ max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid var(--line);
+         border-radius:8px; padding:22px 26px; color:var(--ink); }
+  .大厅 h1{ margin:0 0 4px; font-size:19px; color:var(--accent); }
+  .大厅 p{ margin:6px 0 14px; font-size:13px; line-height:1.7; }
+
+  .大厅 input{ background:#1d1710; border:1px solid #6b4d28; color:#f0e4cc;
+               border-radius:4px; padding:6px 9px; font-size:13px; margin:0 6px 10px 0; }
+  .大厅 input::placeholder{ color:#9c8967; }
+
+  .大厅 button{ background:var(--accent); color:#2a1c08; border:0; border-radius:4px;
+                padding:7px 16px; font-size:13px; font-weight:700; cursor:pointer; margin-right:8px; }
+
+  .大厅 .次{ background:#4a3520; color:#f0e4cc; border:1px solid #6b4d28; font-weight:400; }
+  .大厅 .座{ display:inline-block; padding:4px 12px; border-radius:4px; margin-right:8px;
+             border:1px solid var(--line); font-size:13px; }
+  .大厅 .座.到{ border-color:var(--accent); color:var(--accent); }
+
+  .房列表{ border:1px solid var(--line); border-radius:6px; overflow:hidden; margin:6px 0 14px; }
+  .房行{ display:flex; align-items:center; gap:12px; padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; }
+  .房行:last-child{ border-bottom:0; }
+  .房行 b{ color:var(--accent); letter-spacing:1px; min-width:52px; }
+  .房行 span{ flex:1; }
+  .房行 button{ padding:4px 14px; font-size:12px; margin:0; }
+</style>
+</head>
+<body>
+<div id="转屏提示"><div>请把手机横过来使用<br><span style="font-size:15px;opacity:.75">（这套界面是宽版；横屏后会自动等比缩放，版式和电脑上一样）</span></div></div>
+<div id="app">正在载入…</div>
+<div id="错误"></div>
+<script>
+window.addEventListener('error', (e) => {
+  document.getElementById('app').innerHTML = '<pre style="color:#e07070">脚本错误：' + (e && e.message) + '</pre>';
+});
+const 符号 = { 蓝:'🔵', 红:'🔴', 绿:'🟢', 黑:'⚫', 紫:'🟣' };
+const 顺序 = ['左边路','左侧翼','中路','右侧翼','右边路'];
+
+let 令牌 = (() => {
+  const u = new URLSearchParams(location.search).get('令牌');
+  if (u) { localStorage.setItem('zmdj令牌', u); return u; }
+  return localStorage.getItem('zmdj令牌') || '';
+})();
+const 带令牌 = (体) => 令牌 ? { ...体, 令牌 } : 体;
+
+let 状态 = null;
+
+let 选中 = null;
+
+let 悬停 = null;
+
+let 待选 = null;
+
+let 会话 = {
+  键: null,
+  选: {},
+  槽: {},
+  模式: null,
+};
+
+let 任务 = null;
+
+let 自动提交中 = null;
+
+function 自动提交(fn, key) {
+  if (自动提交中 === key) return;
+  自动提交中 = key;
+  setTimeout(() => {
+    if (自动提交中 !== key) return;
+    自动提交中 = null;
+    fn();
+  }, 0);
+}
+
+function 候选量(uid) { const m = 任务 && 任务.候选值; return (m && m.get(uid)) || 1; }
+
+function 建槽表() {
+
+  if (选择 && 选择.槽表) return 选择.槽表.map((z) => {
+    const 已选 = 已选全().filter((k) => z.候选.has(k));
+
+    return { 名: z.名, 需: z.需 || { 最小: 0, 最大: 1 }, 候选: z.候选, 已选, 已量: 键量和(已选, z.量) };
+  });
+  const 表 = [];
+
+  const 加槽 = (名, 需最小, 需最大, 候选) => {
+    if (!候选 || !候选.size) return;
+
+    const 已有 = (选择 ? 已选全() : [] || []).filter((k) => 候选.has(k));
+
+    表.push({ 名, 需: { 最小: 需最小, 最大: 需最大 }, 候选, 已选: 已有,
+      已量: 已有.reduce((n, k) => n + 候选量(k), 0) });
+  };
+
+  加槽('额外牺牲', 任务.额外牺牲需 || 0, 任务.额外牺牲需 || 0, 任务.候选额外);
+  加槽('费用弃牌', 任务.弃牌需 || 0, 任务.弃牌需 || 0, 任务.候选弃牌);
+  加槽('费用牺牲', 任务.牺牲需 || 0, 任务.牺牲需 || 0, 任务.候选牺牲);
+  for (const sp of (任务.槽表 || [])) 加槽(sp.目标名, sp.数量?.最小 ?? 0, sp.数量?.最大 ?? 0, new Set(候选键表(sp.候选)));
+  if (任务.候选阵地 && 任务.候选阵地.size) 加槽('阵地', 1, 1, 任务.候选阵地);
+  if (任务.候选支付 && 任务.候选支付.size) 加槽('支付源', 任务.支付是X ? 0 : (任务.需支付 || 0), 任务.支付是X ? 无数 : (任务.需支付 || 0), 任务.候选支付);
+
+  if (!表.length && 任务.候选 && 任务.候选.size) {
+    const 需最小 = 任务.数量 ? (任务.数量.最小 || 0) : 1;
+    const 需最大 = 任务.数量 ? (任务.数量.最大 || 需最小) : 1;
+
+    const 已选0 = 选槽已选('目标').filter((k) => 任务.候选.has(k));
+    表.push({ 名: '目标', 需: { 最小: 需最小, 最大: 需最大 }, 候选: new Set(任务.候选), 已选: 已选0 });
+  }
+  return 表;
+}
+const 无数 = 999;
+function 能收(表, k) { return 表.find((z) => z.候选.has(k) && z.已选.length < z.需.最大) || null; }
+function 槽都够了吗(表) { return 表.every((z) => (z.已量 != null ? z.已量 : z.已选.length) >= z.需.最小); }
+
+function 计数(已挑, 集) { let n = 0; for (const k of 已挑) if (集 && 集.has(k)) n += 候选量(k); return n; }
+function 非支付候选() {
+  const out = new Set();
+  if (!任务 || !任务.候选) return out;
+  for (const k of 任务.候选) if (!(任务.候选支付 && 任务.候选支付.has(k))) out.add(k);
+  return out;
+}
+
+function 能加(uid) {
+  if (!任务) return false;
+
+  return !!能收(建槽表(), uid);
+}
+
+function 能操作(s, p) { return s.我的座位 == null || s.我的座位 === p; }
+
+const 玩家键 = (n) => '玩家' + n;
+
+function 候选键表(候选) {
+  return (候选 || [])
+    .filter((c) => c.类型 === '实体' || c.类型 === '玩家')
+    .map((c) => (c.类型 === '玩家' ? 玩家键(c.玩家) : c.uid));
+}
+
+function 框类(键, 在候选) {
+  const 已 = 已挑(键);
+  return ((已 || 在候选) ? ' 候选' : '') + (已 ? ' 选好' : '');
+}
+
+function 已选全() {
+  if (!选择) return [];
+  const 出 = [];
+  for (const z of (选择.槽表 || [])) for (const k of (选择.槽已选[z.名] || [])) 出.push(k);
+  return 出;
+}
+
+function 已挑(uid) { return !!(选择 && (选择.槽表 || []).some((z) => (选择.槽已选[z.名] || []).includes(uid))); }
+
+function 已付额(源) {
+  const 表 = (状态 && 状态.可支付来源 && 状态.可支付来源[待选玩家()]) || [];
+  return (源 || []).reduce((n, uid) => n + ((表.find((x) => x.uid === uid) || {}).提供 || 0), 0);
+}
+
+function 当前任务(s) {
+  const req = s.当前请求;
+  const d = req && req.决定;
+
+  if (d && d.类型 === '选' && d.选什么 === '触发' && 能操作(s, req.玩家)) {
+    return { 类型: '选', 步: '触发|' + req.玩家 + '|' + (d.标签 || ''), 说明: d.标签,
+             数量: d.数量 || { 最小: 0, 最大: 0 }, 可放弃: false, 可取消: false,
+             需求: s.决定需求 || null,
+             候选表: d.候选, 选什么: '触发',
+
+             提交: () => {} };
+  }
+
+  if (d && d.类型 === '宣告' && 能操作(s, req.玩家)) {
+
+    if (d.模式候选) return null;
+
+    if (!d.模式候选) {
+      const 规格0 = d.规格 || [];
+
+      if (d.模式候选 && d.模式候选.length) return null;
+
+      if (!规格0.length) {
+        const key = '宣告|' + (req.步骤 || '') + '|' + (d.标签 || '');
+        自动提交(() => { const 发 = 填模板(s.决定需求, null); if (发) 动作(发); }, key);
+        return null;
+      }
+      return { 类型: '选', 步: '宣告|' + (req.步骤 || '') + '|' + (d.标签 || ''), 说明: d.标签,
+               数量: { 最小: 0, 最大: 0 }, 可放弃: false, 可取消: false,
+               需求: s.决定需求 || null,
+
+               提交: () => {} };
+    }
+    const 规格 = d.模式候选
+      ? (((d.模式候选.find((m) => m.索引 === 会话.模式) ?? d.模式候选[0]) || {}).规格 || [])
+      : (d.规格 || []);
+    for (const sp of 规格) {
+      const 已 = 宣告选[sp.目标名] || [];
+      if (已.length < sp.数量.最大) {
+
+        return { 类型: '选', 步: '目标:' + sp.目标名,
+                 说明: '点场上的牌或玩家（要选 ' + sp.数量.最大 + ' 个）'
+
+                       + (d.可选 && d.模式候选 ? '　—— 这只是进堆叠时要选的目标；**结算时还会再问一次用不用**，现在选了不等于一定要发动（603.5）' : ''),
+                 数量: sp.数量, 可放弃: false, 可取消: false,
+                 候选: new Set(候选键表(sp.候选)),
+                 提交: (选) => { 宣告选[sp.目标名] = [...选]; render(); } };
+      }
+    }
+
+    return null;
+
+    if (规格.length === 0 || 规格.every((sp) => (宣告选[sp.目标名] || [] || []).length >= sp.数量.最小)) {
+
+      const key = '宣告|' + (req.步骤 || '') + '|' + (d.标签 || '');
+      自动提交(() => { 动作(组装宣告(d, 规格)); 宣告选 = {}; }, key);
+      return null;
+    }
+    return null;
+  }
+
+  if (待选 && 待选.动作) {
+    const a = 待选.动作;
+
+    if (待选.玩家 == null) 待选.玩家 = (s.我的座位 == null ? (s.当前请求 ? s.当前请求.玩家 : 0) : s.我的座位);
+    const 槽s = (a.需求 && a.需求.槽) || [];
+    return { 类型: '选', 步: (a.种类 || '') + '|' + (a.uid ?? ''), 是槽表: true,
+             说明: a.标签 || '',
+             数量: { 最小: 槽s.reduce((n, z) => n + z.需.最小, 0), 最大: 槽s.reduce((n, z) => n + z.需.最大, 0) },
+             需求: a.需求 || null,
+
+             可取消: true,
+
+             提交: () => {} };
+  }
+
+  return null;
+}
+
+let 组牌 = null;
+
+let 组牌筛选 = { 词: '', 势力: '', 类别: '', 费用: '', 基本: '' };
+
+let 组牌选 = null;
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+function 参(值) {
+  if (typeof 值 === 'number') {
+    if (!Number.isFinite(值)) throw new Error('内联处理器的数字参数必须是有限数：' + 值);
+    return String(值);
+  }
+  if (typeof 值 === 'boolean') return 值 ? 'true' : 'false';
+  if (typeof 值 !== 'string') throw new Error('内联处理器的参数只支持 字符串/数字/布尔：' + JSON.stringify(值));
+  const s = 值
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/&(?!(?:quot|lt|gt|amp|#\d+);)/g, '&amp;')
+    .replace(/\r?\n/g, '\\n');
+  return "'" + s + "'";
+}
+
+function 内联(名, ...参数s) { return 名 + '(' + 参数s.map(参).join(',') + ')'; }
+const 需文 = (c) => Object.entries(c.势力需求 || {}).map(([k, v]) => 符号[k].repeat(v)).join('');
+const 供文 = (c) => Object.entries(c.支持 || {}).map(([k, v]) => 符号[k].repeat(v)).join('');
+const 类文 = (c) => ((c.超类别 && c.超类别.length ? c.超类别.join('') : '') + c.类别.join('/'))
+  + (c.副类别 && c.副类别.length ? '～' + c.副类别.join('/') : '');
+
+const 选源 = { 战场: '战场', 区域: '区域', 堆叠: '堆叠', 待进堆叠: '待进堆叠', 额外: '额外' };
+let 选择 = null;
+
+let 宣告选 = {};
+
+const 槽键 = (z) => (((z && z.候选) || []).map((c) => (c && typeof c === 'object' && '键' in c) ? c.键 : c));
+
+const 槽量表 = (z) => ((z && z.候选) || []).reduce((m, c) => {
+  if (c && typeof c === 'object' && c.量 != null) m[c.键] = c.量;
+  return m;
+}, {});
+
+const 键量和 = (键s, 量表) => (键s || []).reduce((n, k) => n + ((量表 && 量表[k]) || 1), 0);
+
+function 开始选({ 名字, 源, 候选, 数量, 可放弃, 已选, 用途, 槽表 }) {
+  选择 = {
+    名字: 名字 || '',
+    源: 源 || 选源.战场,
+    候选: 候选 instanceof Set ? 候选 : new Set(候选 || []),
+    数量: 数量 || { 最小: 1, 最大: 1 },
+
+    槽表: 槽表 || null,
+
+    可放弃: 可放弃 === true,
+
+    槽已选: (() => {
+      const 初 = {};
+      if (!槽表) return 初;
+      for (const z of 槽表) 初[z.名] = (已选 || []).filter((k) => z.候选.has(k)).slice(0, z.需?.最大 ?? 99);
+      return 初;
+    })(),
+    用途: 用途,
+
+  };
+  return 选择;
+}
+
+function 点选(uid) {
+
+  if (选择 && 选点(uid)) render();
+}
+
+function 点能力(键) {
+
+  点选(键);
+}
+
+function 点阵地(slot) {
+
+  点选(slot);
+}
+
+function 待选玩家() { return 状态.我的座位 == null ? (状态.当前请求 ? 状态.当前请求.玩家 : 0) : 状态.我的座位; }
+
+function 取消任务() {
+  待选 = null; 宣告选 = {};
+  选择 = null;
+  render();
+}
+
+function 填模板(需求, 动作体) {
+  if (!需求 || !需求.确认后发) return null;
+  const 发 = JSON.parse(JSON.stringify(需求.确认后发));
+  const 槽s = 需求.槽 || [];
+  const 归名 = (z) => (z && typeof z.归 === 'string' && z.归) ? z.归 : z.名;
+  const 取组 = (名) => {
+    const 出 = [];
+    for (const z of 槽s) {
+      if (归名(z) !== 名) continue;
+      for (const k of (选择 ? (选择.槽已选[z.名] || []) : [])) {
+        const c = (z.候选 || []).find((x) => x && typeof x === 'object' && x.键 === k);
+        const 值 = (c && typeof c === 'object' && '发' in c) ? c.发 : k;
+        if (值 !== undefined) 出.push(值);
+      }
+    }
+    return 出;
+  };
+  for (const 字段 of Object.keys(发)) {
+    const v = 发[字段];
+    if (typeof v !== 'string') continue;
+    if (v[0] === '$') {
+      const 已 = 取组(v.slice(1));
+
+      if (已.length) 发[字段] = 已; else delete 发[字段];
+    } else if (v[0] === '@') {
+      const 值 = 动作体 ? 动作体[v.slice(1)] : undefined;
+      if (值 !== undefined) 发[字段] = 值; else delete 发[字段];
+    }
+  }
+  return 发;
+}
+
+function 提交(放弃) {
+
+  const 需求源 = 任务 ? (任务.需求 || null) : ((状态 && 状态.决定需求) || null);
+
+  const 发 = 填模板(需求源, (待选 && 待选.动作) || null);
+  if (发) { 动作(发); render(); return; }
+
+  if (!任务) return;
+
+  const 结果 = 选择 ? (选择.槽表
+    ? 选择.槽表.flatMap((z) => 已选全().filter((k) => z.候选.has(k)))
+    : [...已选全()]) : [];
+  任务.提交(结果, 放弃);
+  render();
+}
+
+function 决定键(s) {
+  const req = s.当前请求, d = req && req.决定;
+  if (!req || !d || !能操作(s, req.玩家)) return null;
+  const 量 = d.数量 ? (d.数量.最小 + '-' + d.数量.最大) : (d.需弃 ?? d.张数 ?? '');
+  return [d.类型, d.选什么 || '', req.玩家, d.标签 || '', 量].join('|');
+}
+
+function 对齐会话(s) {
+
+  const d0 = s.当前请求 && s.当前请求.决定;
+  if (d0 && d0.类型 === '宣告' && d0.模式候选 && !d0.模式候选.some((m) => m.索引 === 会话.模式)) {
+    会话.模式 = d0.模式候选[0].索引;
+  }
+  const t = 当前任务(s);
+  const 键 = t ? t.类型 + '|' + (t.步 || '') : 决定键(s);
+
+  if (键 !== 会话.键) { 会话.键 = 键; 选择 = null; }
+
+  return t;
+}
+
+let 选择的键 = null;
+function 对齐选择状态() {
+  const s = 状态;
+  const d = s && s.当前请求 && s.当前请求.决定;
+  const 键 = !s ? null : [
+    s.over ? 'over' : '',
+    s.当前请求 ? s.当前请求.玩家 : '-',
+    s.当前请求 ? (s.当前请求.步骤 || '') : '',
+    d ? (d.类型 || '') : '',
+    s.当前请求 ? (s.当前请求.时机 || '') : '',
+  ].join('|');
+  if (键 === 选择的键) return;
+  选择的键 = 键;
+  清掉选择();
+}
+
+function 切换选择(uid, 上限) { if (选择 && 选点(uid)) render(); void 上限; }
+
+function 清掉选择() {
+  选中 = null; 悬停 = null; 待选 = null;
+  宣告选 = {};
+
+  选择 = null;
+}
+
+function 选点(键) {
+  if (!选择 || !选择.候选.has(键)) return false;
+
+  const 在 = (选择.槽表 || []).find((z) => (选择.槽已选[z.名] || []).includes(键));
+  if (在) { 选择.槽已选[在.名] = 选择.槽已选[在.名].filter((k) => k !== 键); return true; }
+
+  const z = 选槽(键);
+  if (!z) return false;
+  const 已有 = 选择.槽已选[z.名] || [];
+
+  if (键量和(已有, z.量) >= (z.需?.最大 ?? 选择.数量.最大)) return false;
+  选择.槽已选[z.名] = [...已有, 键];
+  return true;
+}
+
+function 选槽(键) {
+  if (!选择 || !选择.槽表) return null;
+  const 我 = 待选玩家();
+  for (const z of 选择.槽表) {
+
+    if (z.条件 && z.条件.玩家 !== undefined && z.条件.玩家 !== 我) continue;
+    const 已有 = (选择.槽已选[z.名] || []).filter((k) => z.候选.has(k));
+    if (z.候选.has(键) && (已有.includes(键) || 已有.length < (z.需?.最大 ?? 1))) return z;
+  }
+  return null;
+}
+
+function 选槽已选(名) {
+  if (!选择) return [];
+  if (选择.槽已选 && 名 in 选择.槽已选) return 选择.槽已选[名];
+  const z = (选择.槽表 || []).find((x) => x.名 === 名);
+
+  return z ? 已选全().filter((k) => z.候选.has(k)) : [];
+}
+
+function 选能动(键) { const s = 选态(键); return s === '可点' || s === '已选'; }
+function 选态(键, 行主) {
+  if (!选择) return '不可选';
+
+  const 槽 = (选择.槽表 || []).find((z) => z.候选.has(键));
+  const 我 = (行主 === undefined || 行主 === null) ? 待选玩家() : 行主;
+  if (槽 && 槽.条件 && 槽.条件.玩家 !== undefined && 槽.条件.玩家 !== 我) return '不可选';
+
+  if (已选全().includes(键)) return '已选';
+  return 槽 ? '可点' : '不可选';
+}
+
+function 选槽进度(名) {
+  const z = (选择 && 选择.槽表 || []).find((x) => x.名 === 名);
+  const 已 = 选槽已选(名);
+  return { 已选: 已.length, 需: z ? z.需 : { 最小: 0, 最大: 0 } };
+}
+function 选可点(键) { return !!(选择 && 选择.候选.has(键)); }
+function 选已中(键) { return !!(选择 && 已选全().includes(键)); }
+
+function 卡牌(c, 大, 只悬停) {
+  if (!c) return '';
+  const 需 = 需文(c);
+
+  const 是领土 = c.类别.includes('领土');
+  const 费 = 是领土 ? 供文(c) : ((需 ? 需 + (c.费用 ? ' ' : '') : '') + (c.费用 ? c.费用 : (需 ? '' : '0')));
+
+  const 色 = (终, 印) => (终 > 印 ? 'up' : 终 < 印 ? 'dn' : '');
+  const pt = c.是单位 && c.武力 != null
+    ? '<span class="pt">'
+      + '<b class="' + 色(c.武力, c.印制武力 ?? c.武力) + '">' + c.武力 + '</b>'
+      + '/'
+      + '<b class="' + 色(c.体力上限, c.印制体力上限 ?? c.体力上限) + '">' + c.体力上限 + '</b>'
+      + (c.已受伤 ? '<b class="hurt" title="已受伤：已失去的体力（120.5）">-' + c.已受伤 + '</b>' : '')
+      + '</span>'
+    : '';
+
+  const 其他标记 = (c.标记 || []).filter((m) => !/^[+]/.test(m));
+  const 标记块 = 其他标记.length
+    ? '<div class="mk">' + 其他标记.map((m) => '<span>' + esc(m) + '</span>').join('') + '</div>'
+    : '';
+  const tags = (c.整备 ? '<span class="tag">整备</span>' : '')
+             + (c.面 === '暗置' ? '<span class="tag">暗置</span>' : '')
+             +
+
+    (c.关键词 || []).map((k) => '<span class="tag kw">' + esc(typeof k === 'string' ? k : (k.名称 ?? '') + (k.数值 !== undefined ? k.数值 : '')) + '</span>').join('');
+
+    const 是候选 = 选可点(c.uid) || !!(任务 && ((任务.候选 && 任务.候选.has(c.uid))
+      || (任务.候选支付 && 任务.候选支付.has(c.uid))));
+    void 是候选;
+  return '<div class="card p' + c.操控者 + ((选中 === c.uid || 已挑(c.uid)) ? ' sel' : '')
+    + 框类(c.uid, 是候选) + (c.横置 ? ' isTapped' : '')
+    + (可用牌.has(c.uid) ? ' 可用' : '')
+
+    + (c.面 === '暗置' ? ' back' : '') + '"'
+    + ' onmouseenter="悬停=' + c.uid + ';刷新详情()" onmouseleave="悬停=null;刷新详情()"'
+    + (只悬停 ? '' : ' onclick="' + 内联('选牌', c.uid) + '"') + '>'
+
+    + '<div class="art"' + (c.图 && c.面 !== '暗置' ? ' style="background-image:url(\'' + c.图 + '\')"' : '') + '></div>'
+    + (费 ? '<span class="cst">' + 费 + '</span>' : '')
+    + '<span class="fac">' + esc(c.势力 ? c.势力.join('/') : '中立') + '</span>'
+    + 标记块
+    + pt
+    + '<div class="plate">'
+    + '<div class="nm">' + esc(c.名称) + '</div>'
+    + '<div class="ty">' + esc(类文(c)) + '</div>'
+    + (tags ? '<div class="tags">' + tags + '</div>' : '')
+    + '</div></div>';
+}
+
+function 堆叠行(s) {
+  const 层 = s.stack || [];
+
+  let 上 = '';
+  if (任务 && 任务.选什么 === '触发' && 任务.候选表 && 任务.候选表.length) {
+    const 序 = new Map([...(选择 ? 已选全() : [])].map((k, i2) => [k, i2 + 1]));
+    const 条 = 任务.候选表.map((c) => {
+      const 选 = 选已中(c.键);
+      return '<span class="cap' + 框类(c.键, true) + '"'
+        + ' onclick="' + 内联('点选', c.键) + '">' + (选 ? 序.get(c.键) + '. ' : '') + esc(c.名称 || '') + '</span>';
+    }).join('');
+    上 = '<div class="zlabel">触发中（还没进堆叠）'
+      + '<span class="dim">点选顺序 —— 最后点的先结算（603.3b）</span></div>'
+      + '<div class="row">' + 条 + '</div>'
+      + '<hr style="border:0;border-top:1px solid #8a6a3a;margin:6px 0">';
+  }
+  let h = '<div class="stackrow"><div class="zlabel">堆叠'
+    + (层.length
+        ? '（' + 层.length + '）　<span class="dim">从上到下依次结算</span>'
+        : '　<span class="dim">空</span>')
+    + '</div><div class="row">';
+
+  for (let i = 层.length - 1; i >= 0; i--) {
+    const 项 = 层[i];
+    if (项.卡) { h += 卡牌({ ...项.卡, uid: 项.卡.uid }, true); continue; }
+
+    const 键 = -项.栈id;
+    const 可 = 选可点(键);
+    const 选 = 已挑(键);
+    h += '<span class="cap' + 框类(键, 可) + '"'
+      + ((可 || (选择 && 选已中(键))) ? ' onclick="' + 内联('点能力', 键) + '"' : '') + '>' + esc(项.标签) + '</span>';
+  }
+  if (!层.length) h += '<span class="empty">还没有牌或能力在堆叠上</span>';
+  return 上 + h + '</div></div>';
+}
+
+function 阵地行(s, i) {
+  const pl = s.players[i];
+  let h = '<div class="slots">';
+
+  const 我方号 = (s.我的座位 != null) ? s.我的座位 : 0;
+  const 这一排顺序 = (i === 我方号) ? 顺序 : [...顺序].reverse();
+  for (const 名 of 这一排顺序) {
+    const c = pl.阵地[名];
+
+    const 该槽 = 任务 ? 建槽表().find((z) => z.名 === '阵地') : null;
+
+    const 阵地态 = 选态(名, i);
+    const 阵地候选 = 阵地态 === '可点';
+    const 阵地已选 = 阵地态 === '已选';
+
+    h += '<div class="slotwrap"><div class="slot'
+      + (阵地候选 ? ' 候选' : '') + (阵地已选 ? ' 选好' : '')
+
+      + ((阵地态 === '可点' || 阵地态 === '已选') ? '" onclick="' + 内联('点阵地', 名) + '"' : '"')
+      + '><span class="vn">' + 名 + '</span>'
+
+      + (c ? '<span class="slotcard">' + 卡牌(c, true, (阵地态 === '可点' || 阵地态 === '已选')) + '</span>' : '')
+      + '</div></div>';
+  }
+  return h + '</div>';
+}
+
+function 当前需求() { return (任务 && 任务.需求) || (状态 && 状态.决定需求) || null; }
+
+function 需求面板(s) {
+
+  const 需0 = 当前需求() || {};
+  const 槽表 = 需0.槽 || [];
+  let x = '<span class="who">' + esc(需0.标题 || (选择 && 选择.名字) || '请选择') + '</span>';
+  for (const z of 槽表) {
+    const 已选 = (选择 ? (选择.槽已选[z.名] || []) : []);
+    const 已量 = 键量和(已选, 槽量表(z));
+    const 够 = 已量 >= (z.需?.最小 ?? 0);
+    if (z.呈现 === '按钮') {
+      x += '<span class="dim">' + esc(z.名) + '</span>';
+      for (const c of (z.候选 || [])) {
+        x += '<button class="act' + (已选.includes(c.键) ? ' on' : '') + '"'
+          + ' onclick="' + 内联('点选', c.键) + '">'
+          + esc(c.名 != null ? c.名 : String(c.键)) + '</button>';
+      }
+    } else {
+
+      const 需小 = (z.需?.最小 ?? 0), 需大 = (z.需?.最大 ?? 0);
+      const 文 = 需小 > 0 ? (已量 + '/' + 需小) : (已量 + (需大 > 0 ? '（最多 ' + 需大 + '）' : ''));
+      x += '<span' + (够 ? '' : ' class="notyours"') + '>' + esc(z.名) + ' ' + 文 + '</span>'
+    }
+  }
+  x += '<span class="spacer"></span>';
+
+  {
+    const 需0 = 当前需求();
+
+    const 查看数 = ((需0 && 需0.查看) || []).length;
+    const 可查看 = [];
+    for (const z of (需0 && 需0.槽) || []) {
+      if (!z || z.可查看 !== true) continue;
+      for (const c of z.候选 || []) if (c) 可查看.push(c);
+    }
+    if (查看数 || 可查看.length) {
+      x += '<button class="act" onclick="' + 内联('开查看', '检视', -1) + '">查看（'
+        + (查看数 || 可查看.length) + ' 张）</button>';
+    }
+  }
+
+  if (需0.放弃后发) x += '<button class="act" onclick="放弃选择()">' + esc(需0.放弃名 || '不选') + '</button>';
+
+  {
+    const 双方 = 状态 && 状态.双方确认;
+    if (双方 && Array.isArray(双方.已)) {
+      const 需要 = 双方.需要 || [0, 1];
+      const 我是 = 状态.我的座位;
+      for (const 座 of 需要) {
+        const 名 = (状态.players && 状态.players[座] && 状态.players[座].名字) || ('座位 ' + 座);
+        if (双方.已.includes(座)) { x += '<span class="dim">' + esc(名) + ' ✓已确认</span>'; continue; }
+        if (我是 != null && 座 !== 我是) { x += '<span class="dim">' + esc(名) + ' 待确认…</span>'; continue; }
+        x += '<button class="act" onclick="' + 内联('确认展示', 座) + '">' + esc(名) + ' 确认</button>';
+      }
+      return x;
+    }
+  }
+  x += '<button class="act" onclick="提交(false)"' + (槽都够了吗(建槽表()) ? '' : ' disabled') + '>确认</button>';
+  return x;
+}
+
+function 放弃选择() {
+  const 需0 = 当前需求();
+  if (需0 && 需0.放弃后发) 动作(JSON.parse(JSON.stringify(需0.放弃后发)));
+}
+
+function 确认展示(座) {
+  const 需0 = 当前需求();
+
+  const 包 = (需0 && 填模板(需0, 选择)) || { 种类: '决定', 接受: true };
+
+  包.选 = 包.选 ?? [];
+  包.确认座位 = 座;
+  动作(包);
+}
+
+function 操作条内容(s) {
+  if (s.over) return '<span class="who">对局结束</span><span class="dim">'
+    + (s.winner === null ? '平手' : esc(s.players[s.winner].名字) + ' 获胜') + '</span>';
+  const req = s.当前请求;
+  if (!req) return '<span class="dim">引擎处理中…</span>';
+
+  const 能动 = (typeof s.可操作 === 'boolean') ? s.可操作 : 能操作(s, req.玩家);
+
+  const 看 = ((当前需求() || {}).查看 || []);
+  const 查看按钮 = 看.length
+    ? ' <button class="act" onclick="' + 内联('开查看', '检视', -1) + '">查看（' + 看.length + ' 张）</button>'
+    : '';
+  if (!能动) {
+
+    const 双方 = s.双方确认;
+    if (双方) {
+      const 缺 = (双方.需要 || []).filter((x) => !(双方.已 || []).includes(x));
+      return '<span class="who">等待 ' + (缺.map((x) => esc(s.players[x].名字)).join('、') || '对方') + ' 确认</span>'
+        + '<span class="dim">（' + esc(req.步骤 || '—') + '）双方都确认后才继续</span>' + 查看按钮;
+    }
+    return '<span class="who">' + esc(s.players[req.玩家].名字) + ' 行动中…</span>'
+      + '<span class="dim">（' + esc(req.步骤 || '—') + '）轮到对方，你暂时没有可做的</span>' + 查看按钮;
+  }
+
+  if (s.双方确认) {
+    const 我的座 = s.我的座位;
+    const 座s = (s.双方确认.需要 || [])
+      .filter((座) => 我的座 === null || 我的座 === -1 || 座 === 我的座);
+    let y = '<span class="who">' + esc(req.步骤 || '展示') + '</span>';
+    for (const 座 of 座s) {
+      const 已 = (s.双方确认.已 || []).includes(座);
+      y += '<button class="act' + (已 ? ' on' : '') + '"' + (已 ? ' disabled' : '')
+        + ' onclick="' + 内联('确认展示', 座) + '">' + esc(s.players[座].名字) + (已 ? ' 已确认' : ' 确认') + '</button>';
+    }
+
+    const 缺 = (s.双方确认.需要 || []).filter((座) => !(s.双方确认.已 || []).includes(座) && !座s.includes(座));
+    if (缺.length) y += '<span class="dim">（' + 缺.map((座) => esc(s.players[座].名字)).join('、') + ' 待确认…）</span>';
+    return y + 查看按钮;
+  }
+  if (!任务 && req.决定 && 选择 && 选择.槽表) return 需求面板(s);
+
+  if (任务) {
+    let x = '';
+
+    const d0 = req.决定;
+    if (d0 && d0.类型 === '宣告' && d0.模式候选) {
+      if (会话.模式 === null || !d0.模式候选.some((m) => m.索引 === 会话.模式)) 会话.模式 = d0.模式候选[0].索引;
+      x += '<span class="who">' + esc(s.players[req.玩家].名字) + ' 宣告</span>';
+      d0.模式候选.forEach((m) => {
+        x += '<button class="act' + (会话.模式 === m.索引 ? ' on' : '') + '" onclick="' + 内联('选模式', m.索引) + '">' + esc(m.标签) + '</button>';
+      });
+      x += '<span class="spacer"></span>';
+    }
+
+      x += '<span class="who">' + esc(任务.类型) + '</span>'
+
+        if (任务.是槽表) {
+          x += '<b>选</b> ' + 建槽表().map((z) => z.名 + ' ' + z.已选.length + '/' + z.需.最小 + (z.已选.length < z.需.最小 ? '（还差）' : '')).join('　');
+        } else {
+          x += '<b>选</b> ' + esc(任务.说明 || '');
+        }
+        + '<span>' + esc(任务.说明) + '（已选 ' + 建槽表().reduce((n, z) => n + z.已选.length, 0) + '/' + 任务.数量.最大 + '）</span>'
+        + '<span class="spacer"></span>';
+
+    if (任务.需支付 > 0) {
+
+  const 付了 = 已付额(选槽已选('支付源'));
+      x += '<span' + (付了 >= 任务.需支付 ? '' : ' class="notyours"') + '>支付 ' + 付了 + '/' + 任务.需支付 + '</span>';
+    } else if (任务.支付是X) {
+
+      const 付了 = 已付额(选槽已选('支付源'));
+      x += '<span>X = ' + 付了 + '　挑几块地就是几</span>';
+    }
+    if (任务.可放弃) x += '<button class="act" onclick="提交(true)">不选</button>';
+
+  const 阵地算目标 = !(任务.候选 && 任务.候选.size > 0);
+  const 是别的槽 = (k) => (任务.候选弃牌 && 任务.候选弃牌.has(k)) || (任务.候选牺牲 && 任务.候选牺牲.has(k))
+    || (任务.候选额外 && 任务.候选额外.has(k)) || (任务.候选支付 && 任务.候选支付.has(k))
+    || (!阵地算目标 && 任务.候选阵地 && 任务.候选阵地.has(k));
+
+  const __槽们 = 建槽表();
+  const __槽 = (名) => __槽们.find((z) => z.名 === 名);
+  const 目标量 = 任务.只挑费用 ? (__槽('额外牺牲')?.已选.length ?? __槽('费用牺牲')?.已选.length ?? __槽('费用弃牌')?.已选.length ?? 0)
+    : __槽们.filter((z) => !['额外牺牲', '费用弃牌', '费用牺牲', '支付源', '阵地'].includes(z.名)).reduce((n, z) => n + z.已选.length, 0);
+
+    const 钱量 = 选择 ? 已选全().filter((k) => 任务.候选支付 && 任务.候选支付.has(k)).length
+                     : 计数(选槽已选('支付源'), 任务.候选支付);
+
+    const 费量 = [...已选全()].filter((k) => (任务.候选弃牌 && 任务.候选弃牌.has(k)) || (任务.候选牺牲 && 任务.候选牺牲.has(k)) || (任务.候选额外 && 任务.候选额外.has(k))).length;
+
+  const 齐 = 槽都够了吗(建槽表());
+
+  x += '<button class="act" onclick="提交(false)"' + (齐 ? '' : ' disabled') + '>确认</button>';
+    if (任务.可取消) x += '<button class="act" onclick="取消任务()">取消</button>';
+    return x;
+  }
+  const d = req.决定;
+
+  const p = req.玩家;
+  const 我位 = s.我的座位 == null ? null : s.我的座位;
+  const 是我 = 我位 === null ? null : (p === 我位);
+
+  const 主动名 = esc(s.players[s.active].名字);
+  const 是他的回合 = p === s.active;
+  let h = '<span class="turninfo">第 ' + s.turn + ' 回合 · <b>' + 主动名 + '的回合</b>'
+    + (是他的回合 ? '' : '<span class="notyours">（现在轮到 ' + esc(s.players[p].名字) + ' 拿优先权）</span>')
+    + '</span>'
+    + '<span class="who">' + esc(s.players[p].名字) + ' 的优先权</span>'
+    + '<span class="dim">' + esc(req.步骤) + (我位 === null ? '（热座：你在替 ' + esc(s.players[p].名字) + ' 操作）'
+      : (是我 ? '（你）' : '（对手操作中）')) + '</span>';
+
+  if (我位 !== null && !是我) {
+    return h + '<span class="dim">等 ' + esc(s.players[p].名字) + ' 操作……</span>';
+  }
+
+  if (待选) {
+    const a = 待选.动作;
+    h += '<span>' + esc(a.标签) + '</span>';
+
+    h += '<button onclick="待选=null;render()">取消</button>';
+  } else {
+    const 能用 = (s.合法动作 || []).filter((a) => a.uid != null);
+    if (选中) {
+      const 可做 = 能用.filter((a) => a.uid === 选中);
+
+      可做.forEach((a) => {
+        h += '<button class="act" onclick="' + 内联('点动作', s.合法动作.indexOf(a)) + '">' + esc(a.标签) + '</button>';
+      });
+      if (!可做.length) h += '<span class="dim">这张牌现在不能用</span>';
+      h += '<button onclick="选中=null;render()">取消选择</button>';
+    } else {
+      h += 能用.length
+        ? '<span class="dim">点带金框的牌来操作</span>'
+        : '<span class="dim">现在没有能用的牌 —— 通常是在等结算或等你做一个选择，看上面的提示</span>';
+    }
+  }
+  if ((s.合法动作 || []).some((a) => a.种类 === '让过')) {
+    h += '<button onclick="动作({种类:\'让过\'})">让过</button>';
+  }
+  return h;
+}
+
+function 半场(s, i, 侧) {
+  const pl = s.players[i];
+  const 领土 = pl.阵地外.filter((c) => c.类别.includes('领土'));
+  const 战场 = pl.阵地外.filter((c) => !c.类别.includes('领土'));
+  const 反向 = 侧 === '对手';
+  const 手牌数 = pl.隐藏手牌 ? pl.手牌张数 : pl.手牌.length;
+  const 手牌内容 = pl.隐藏手牌
+    ? (pl.手牌张数 ? Array.from({ length: pl.手牌张数 }, () => '<div class="card back" title="对手手牌：401/402 隐藏区"></div>').join('') : '<span class="empty">（无）</span>')
+    : (pl.手牌.length ? pl.手牌.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>');
+  const 手牌行 = '<div class="handrow" style="grid-column:1/-1"><div class="zlabel">手牌（' + 手牌数 + '）'
+    + (pl.隐藏手牌 ? '<span class="dim"> 隐藏</span>' : '') + '</div>'
+    + '<div class="zone"><div class="row">' + 手牌内容 + '</div></div></div>';
+  const 领土块 = '<div><div class="zlabel">领土（' + 领土.length + '）</div><div class="zone"><div class="row">'
+    + (领土.length ? 领土.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>') + '</div></div></div>';
+
+  const 战场块 = '<div><div class="zlabel" title="403.1：战场分为阵地和阵地以外的战场。没有阵地的单位也放在这里">阵地以外的战场（' + 战场.length + '）</div><div class="zone"><div class="row">'
+    + (战场.length ? 战场.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>') + '</div></div></div>';
+  const 牌堆 = '<div><div class="zlabel">牌库 / 墓地</div>'
+    + '<div class="zoneboxrow">'
+    + '<div class="zonebox deck backimg" onclick="' + 内联('开查看', '牌库', i)
+    + '" title="牌库是平级区域：点开能看见张数与背面；被「检视」照到的牌显示正面（401.2/401.3 不能主动查看内容）">'
+    + '<span class="zb-label">牌库</span><span class="zb-count">' + pl.牌库张数 + '</span></div>'
+    + '<div class="zonebox" onclick="' + 内联('开查看', '墓地', i) + '" title="404.2：墓地是公开区，可以随时检视">'
+    + '<span class="zb-label">墓地</span><span class="zb-count">' + pl.墓地对数 + '</span></div>'
+    + '</div>'
+
+    + (() => {
+      const 玩键 = '玩家' + i;
+      const 可 = 选可点(玩键);
+
+      const 选 = 选已中(玩键);
+      return '<div class="pile' + 框类(玩键, 可) + '" style="margin-top:3px"'
+        + ((可 || (选择 && 选已中(玩键))) ? ' onclick="' + 内联('点选', 玩键) + '" title="选这个玩家为目标"' : '')
+        + '>体力<b>' + pl.体力 + '/' + pl.体力上限 + '</b></div>';
+    })()
+    + '<div class="pile">势力支持<b>' + (Object.entries(pl.支持).map(([k, v]) => 符号[k] + v).join('') || '无') + '</b></div></div>';
+  const 中场 = '<div class="mid2">' + (反向 ? 领土块 + 战场块 : 战场块 + 领土块) + '</div>';
+
+  const 阵 = '<div style="grid-column:1/-1">' + 阵地行(s, i) + '</div>';
+
+  const 行动者 = s.当前请求 ? s.当前请求.玩家 : null;
+  const 是当前 = (行动者 === 'both' || 行动者 === i) && !s.over;
+
+  const 操作条 = '<div class="opbar">' + 操作条内容(s) + '</div>';;
+  const 内容 = 反向
+    ? 手牌行 + 牌堆 + 中场 + 阵
+    : 阵 + 中场 + 牌堆 + 操作条 + 手牌行;
+
+  const 对局中 = !s.开局;
+  const 热座 = s.我的座位 == null;
+  const 该压暗 = 对局中 && (热座 ? 是当前 : i === s.我的座位);
+  return '<section data-块="' + (反向 ? '对手半场' : '我方半场') + '" class="half ' + (反向 ? 'opp' : 'me') + (i === s.active ? ' active' : '')
+    + (是当前 ? ' acting' : '') + (该压暗 ? ' 有可用' : '') + '">' + 内容 + '</section>';
+}
+
+function 找牌(uid) {
+  if (uid == null) return null;
+
+  {
+    const 需0 = 当前需求();
+    for (const z of (需0 && 需0.槽) || []) {
+      for (const c of z.候选 || []) if (c && c.卡 && c.卡.uid === uid) return { c: c.卡, 处: '查看（本步能看到的牌）', 我: null };
+    }
+  }
+  for (const pl of 状态.players) {
+    for (const c of pl.手牌) if (c.uid === uid) return { c, 处: '手牌', 我: pl.index };
+    for (const c of pl.阵地外) if (c.uid === uid) return { c, 处: '战场', 我: pl.index };
+    for (const k of 顺序) { const c = pl.阵地[k]; if (c && c.uid === uid) return { c, 处: '阵地 ' + k, 我: pl.index }; }
+
+    for (const c of pl.墓地) if (c.uid === uid) return { c, 处: '墓地', 我: pl.index };
+  }
+  for (const c of (状态.放逐区 || [])) if (c.uid === uid) return { c, 处: '放逐区', 我: null };
+  for (const it of (状态.stack || [])) if (it.卡 && it.卡.uid === uid) return { c: it.卡, 处: '堆叠', 我: it.操控者 };
+  return null;
+}
+
+function 该牌动作(uid) { return (状态.合法动作 || []).filter((a) => a.uid === uid); }
+
+function 详情内容() {
+  const o = 状态 && 状态.开局;
+
+  const uid = 悬停 != null ? 悬停 : 选中;
+  const f = 找牌(uid);
+  if (!f) return '<div class="dhead"><div class="dname">卡牌信息</div>'
+    + '<div class="dmeta">鼠标移到任意牌上看信息；点自己可用的牌，操作会出现在你手牌上方。</div></div>'
+    + '<div class="dbox"><span class="dim">（鼠标移到任意牌上）</span></div><div class="dtext">（未选中）</div>';
+  const c = f.c;
+  return '<div class="dhead"><div class="dname">' + esc(c.名称) + '</div>'
+    + '<div class="dmeta">' + esc(类文(c)) + '　' + esc(c.势力 ? c.势力.join('/') : '中立')
+    + (c.是单位 ? '　' + c.武力 + '/' + c.体力上限 + (c.已受伤 ? '（受伤 ' + c.已受伤 + '）' : '') : '')
+    + '　费用 ' + c.费用 + (需文(c) ? '　需求 ' + 需文(c) : '') + (供文(c) ? '　提供 ' + 供文(c) : '')
+
+    + '<br>' + esc(f.处) + '（' + esc(状态.players[f.我]?.名字 ?? '共享区') + '）'
+    + (c.横置 ? '　横置' : '') + (c.整备 ? '　整备' : '') + (c.面 === '暗置' ? '　暗置' : '') + '</div></div>'
+
+    + '<div class="dbox">' + (c.图 ? '<img src="' + c.图 + '" alt="' + esc(c.名称) + '">'
+        : c.面 === '暗置' ? '<img src="/cards/背面.jpg" alt="暗置">'
+        : '<span class="dim">（无卡图）</span>') + '</div>'
+    + '<div class="dtext">' + esc(c.文字 || '（无规则文字）') + '</div>';
+}
+
+function 刷新详情() {
+  const el = document.getElementById('详情');
+  if (el) el.innerHTML = 详情内容();
+}
+
+function 图块(c, 本组计数) {
+  return '<div class="poolitem" title="' + esc(c.名称) + '"'
+    + ' onmouseenter="' + 内联('组牌悬停到', c.id) + '" onclick="' + 内联('组牌点选', c.id) + '">'
+    + (c.图 ? '<img src="' + c.图 + '" alt="' + esc(c.名称) + '" loading="lazy">'
+            : '<div class="none">' + esc(c.名称) + '</div>')
+    + (本组计数[c.id] ? '<span class="cnt">' + 本组计数[c.id] + '</span>' : '')
+    + '</div>';
+}
+
+function 过筛排序卡池() {
+  const f = 组牌筛选, p = 组牌;
+  return p.卡池
+    .filter((c) => {
+      if (f.词 && (c.名称 + ' ' + (c.副类别 || []).join('') + ' ' + (c.类别 || []).join('')).indexOf(f.词) < 0) return false;
+
+      if (f.势力 === '无势力') { if ((c.势力 || []).length) return false; }
+      else if (f.势力 && (c.势力 || []).indexOf(f.势力) < 0) return false;
+      if (f.类别 && (c.类别 || []).indexOf(f.类别) < 0) return false;
+      if (f.费用 !== '' && c.费用 !== Number(f.费用)) return false;
+      if (f.基本 === '基本' && !c.基本) return false;
+      if (f.基本 === '非基本' && c.基本) return false;
+      return true;
+    })
+    .sort((a, b) =>
+      String(a.系列).localeCompare(String(b.系列), 'zh')
+      || String(a.编号).localeCompare(String(b.编号), 'zh', { numeric: true }));
+}
+
+function 卡池区(过的, 侧, 可改, 本组计数) {
+  return '<div class="zlabel" id="组牌卡池标">卡池——' + (可改 ? '点一下加进「' + 侧 + '」' : '只能看（这是对方那一组）')
+    + '（<b id="组牌卡池数">' + 过的.length + '</b> 种）</div>'
+    + '<div class="poolgrid 图" id="组牌卡池">'
+    + (过的.length ? 过的.map((c) => 图块(c, 本组计数)).join('') : '<span class="dim">（没有符合筛选的牌）</span>')
+    + '</div>';
+}
+
+function 组牌面板() {
+  const p = 组牌;
+  const 计数 = (ids) => ids.reduce((m, id) => { m[id] = (m[id] || 0) + 1; return m; }, {});
+  const 我位 = 状态 && 状态.我的座位 != null ? 状态.我的座位 : null;
+
+  const 能改 = (侧) => 我位 === null || (我位 === 0 ? 侧 === '甲' : 侧 === '乙');
+  const 侧 = p.侧;
+  const 可改 = 能改(侧);
+  const 找 = (id) => p.卡池.find((x) => x.id === id) || null;
+
+  const f = 组牌筛选;
+  const 过的 = 过筛排序卡池();
+
+  const 本组计数 = 计数(p[侧]);
+  const 有筛选 = !!(f.词 || f.势力 || f.类别 || f.费用 !== '' || f.基本);
+
+  const 本组 = () => {
+    const m = 计数(p[侧]);
+    const ids = Object.keys(m);
+    if (!ids.length) return '<div class="deckgrid"><span class="dim">（还没加牌）</span></div>';
+    return '<div class="deckgrid">' + ids.map((id) => {
+      const c = 找(id) || { id, 名称: id, 图: null };
+      return '<div class="thumb" title="' + esc(c.名称) + ' ×' + m[id] + (可改 ? '（点一下减一张）' : '') + '"'
+        + ' onmouseenter="' + 内联('组牌悬停到', id) + '"'
+        + (可改 ? ' onclick="' + 内联('减牌', 侧, id) + '"' : '') + '>'
+        + (c.图 ? '<img src="' + c.图 + '" alt="' + esc(c.名称) + '" loading="lazy">'
+                : '<div class="none">' + esc(c.名称) + '</div>')
+        + '<span class="n">' + m[id] + '</span></div>';
+    }).join('') + '</div>';
+  };
+
+  const 校 = (t) => !t ? '' : (t.错误 || []).map((e) => '<div style="color:var(--bad)">✗ ' + esc(e) + '</div>').join('')
+    + (t.警告 || []).map((e) => '<div class="dim">! ' + esc(e) + '</div>').join('');
+
+  const 势力们 = ['魏', '蜀', '吴', '群', '汉', '无势力'];
+  const 类别们 = ['单位', '锦囊', '阵略', '战器', '领土'];
+  const 左 = '<div class="leftcol">'
+    + '<div class="topbar"><b>组牌</b><span class="dim">' + (我位 === null
+        ? '单机：两组都能改'
+        : '联机：你只能改 <b style="color:var(--accent)">' + (我位 === 0 ? '甲' : '乙') + '</b>') + '</span></div>'
+    + '<div class="filters">'
+    + '<div><label>搜索（名称／副类别）</label>'
+    + '<input id="组牌搜索" value="' + esc(f.词) + '" placeholder="例如：黄巾、骑、领土" oninput="设筛选(\'词\',this.value)"></div>'
+    + '<div><label>势力</label><div class="势力钮">'
+    + '<button class="' + (f.势力 === '' ? 'on' : '') + '" onclick="设筛选(\'势力\',\'\')">全部</button>'
+    + 势力们.map((x) => '<button class="' + (f.势力 === x ? 'on' : '') + '" onclick="' + 内联('设筛选', '势力', x) + '">' + x + '</button>').join('')
+    + '</div></div>'
+    + '<div><label>类别</label><div class="势力钮">'
+    + '<button class="' + (f.类别 === '' ? 'on' : '') + '" onclick="设筛选(\'类别\',\'\')">全部</button>'
+    + 类别们.map((x) => '<button class="' + (f.类别 === x ? 'on' : '') + '" onclick="' + 内联('设筛选', '类别', x) + '">' + x + '</button>').join('')
+    + '</div></div>'
+    + '<div><label>费用</label><select onchange="设筛选(\'费用\',this.value)">'
+    + ['', '0', '1', '2', '3', '4', '5', '6', '7'].map((v) =>
+        '<option value="' + v + '"' + (f.费用 === v ? ' selected' : '') + '>' + (v === '' ? '不限' : v + ' 费') + '</option>').join('')
+    + '</select></div>'
+    + '<div><label>基本／非基本</label><select onchange="设筛选(\'基本\',this.value)">'
+    + [['', '不限'], ['基本', '只要基本'], ['非基本', '只要非基本']].map(([v, t]) =>
+        '<option value="' + v + '"' + (f.基本 === v ? ' selected' : '') + '>' + t + '</option>').join('')
+    + '</select></div>'
+    + '<div class="dim">卡池 ' + 过的.length + ' / ' + p.卡池.length + ' 种'
+    + (有筛选 ? '　<button class="次" style="padding:2px 6px" onclick="清筛选()">清筛选</button>' : '') + '</div>'
+    + '</div></div>';
+
+  const 中 = '<div class="deckmain">'
+    + '<div class="deckwrap 单列"><div class="deckcol">'
+
+    + '<b>' + 侧 + '</b> '
+    + '<span class="dim">' + p[侧].length + ' 张' + (可改 ? '' : '　（只能看，不能改）') + '</span> '
+    + (可改 ? '<button onclick="' + 内联('清空', 侧) + '">清空</button>'
+             : '<span class="dim">（由对方编辑）</span>')
+    + 校(p['校验' + 侧]) + 本组() + '</div></div>'
+    + 卡池区(过的, 侧, 可改, 本组计数)
+    + '</div>';
+
+  const 右 = '<div class="side">'
+    + '<div class="topbar">'
+
+    + '<button onclick="document.getElementById(\'导入文件\').click()">导入 .cod</button>'
+    + '<input id="导入文件" type="file" accept=".cod,.xml" style="display:none" onchange="导入套牌文件(this)">'
+    + '<button onclick="切换组牌侧()">切换到 ' + (侧 === '甲' ? '乙' : '甲') + '</button>'
+
+    + (可改 ? '<button onclick="保存牌组()">保存牌组</button>'
+            : '<button disabled title="这一组是对方的，只能看">保存牌组</button>')
+    + '<button class="' + (组牌.无限制 ? 'on' : '') + '" onclick="切换无限制()"'
+    + ' title="测试用：跳过「同名≤3 张」和「主牌 50 张以上」两条构筑限制">无限制：' + (组牌.无限制 ? '开' : '关') + '</button>'
+    + '<button class="次" onclick="组牌=null;render()">取消</button></div>'
+    + '<div class="detail" id="组牌详情">' + 组牌详情() + '</div></div>';
+
+  return '<div class="wrap 组牌wrap">' + 左 + 中 + 右 + '</div>';
+}
+
+function 组牌悬停到(id) { 组牌选 = id; 刷新组牌详情(); }
+
+function 组牌点选(id) {
+  组牌选 = id;
+  const 我位 = 状态 && 状态.我的座位 != null ? 状态.我的座位 : null;
+  const 侧 = 组牌.侧;
+
+  if (我位 === null || (我位 === 0 ? 侧 === '甲' : 侧 === '乙')) 加牌(id);
+  else 刷新组牌详情();
+}
+
+function 设筛选(键, 值) {
+  组牌筛选[键] = 值;
+  if (键 === '词' && 刷新卡池()) return;
+  render();
+}
+
+function 刷新卡池() {
+  const 标 = document.getElementById('组牌卡池标'), 网 = document.getElementById('组牌卡池');
+  if (!标 || !网) return false;
+  const p = 组牌;
+  const 我位 = 状态 && 状态.我的座位 != null ? 状态.我的座位 : null;
+  const 侧 = p.侧;
+  const 可改 = 我位 === null || (我位 === 0 ? 侧 === '甲' : 侧 === '乙');
+  const 过的 = 过筛排序卡池();
+  const 本组计数 = p[侧].reduce((m, id) => { m[id] = (m[id] || 0) + 1; return m; }, {});
+  标.innerHTML = '卡池——' + (可改 ? '点一下加进「' + 侧 + '」' : '只能看（这是对方那一组）')
+    + '（<b id="组牌卡池数">' + 过的.length + '</b> 种）';
+  网.innerHTML = 过的.length ? 过的.map((c) => 图块(c, 本组计数)).join('')
+                            : '<span class="dim">（没有符合筛选的牌）</span>';
+  return true;
+}
+
+function 清筛选() { 组牌筛选 = { 词: '', 势力: '', 类别: '', 费用: '', 基本: '' }; render(); }
+
+function 组牌详情() {
+  const c = 组牌 && 组牌选 ? 组牌.卡池.find((x) => x.id === 组牌选) : null;
+  if (!c) return '<div class="dhead"><div class="dname">卡牌信息</div>'
+    + '<div class="dmeta">鼠标移到卡池或牌组里的牌上看它；点卡池里的牌会加进当前牌组。</div></div>'
+    + '<div class="dbox"><span class="dim">（鼠标移到一张牌上）</span></div><div class="dtext">（未选中）</div>';
+  const 类 = (c.超类别 || []).concat(c.类别 || [], c.副类别 || []).join('～') || '—';
+  const 需 = Object.entries(c.需求 || {}).map(([k, v]) => '{' + k + '}' + v).join('');
+  const 供 = Object.entries(c.支持 || {}).map(([k, v]) => '{' + k + '}' + v).join('');
+  return '<div class="dhead"><div class="dname">' + esc(c.名称) + '</div>'
+    + '<div class="dmeta">' + esc(类) + '　' + esc((c.势力 || []).join('/') || '中立')
+    + (c.是单位 && c.武力 != null ? '　' + c.武力 + '/' + c.体力上限 : '')
+    + '　费用 ' + c.费用 + (需 ? '　需求 ' + 需 : '') + (供 ? '　提供 ' + 供 : '')
+    + '<br>' + esc(c.系列 + ' ' + c.编号) + (c.基本 ? '　【基本】' : '') + '</div></div>'
+    + '<div class="dbox">' + (c.图 ? '<img src="' + c.图 + '" alt="' + esc(c.名称) + '">' : '<span class="dim">（无卡图）</span>') + '</div>'
+    + '<div class="dtext">' + esc(c.文字 || '（无规则文字）') + '</div>';
+}
+
+function 刷新组牌详情() {
+  const el = document.getElementById('组牌详情');
+  if (el) el.innerHTML = 组牌详情();
+}
+
+let 视图 = [];
+const 视图键 = (v) => v.区 + '|' + v.玩家;
+
+function 开查看(区, 玩家) {
+  const v = { 区, 玩家 };
+  if (!视图.some((x) => 视图键(x) === 视图键(v))) 视图.push(v);
+  render();
+}
+
+function 关视图(键) { 视图 = 视图.filter((v) => 视图键(v) !== 键); render(); }
+
+let 布局 = '平';
+
+function 切布局() {}
+
+function 区域视图html(s, v) {
+
+  const 是检视 = v.区 === '检视';
+  const 名 = 是检视 ? '检视（效应让你看的牌）' : (v.区 === '放逐区' ? '放逐区' : s.players[v.玩家].名字 + ' 的' + v.区);
+
+  const 需求候选卡 = (() => {
+    const 需0 = 当前需求();
+
+    return (((需0 && 需0.查看) || [])).filter((c) => c && c.卡).map((c) => c.卡);
+  })();
+  const 列表 = 是检视 ? 需求候选卡
+    : v.区 === '墓地' ? s.players[v.玩家].墓地
+    : v.区 === '放逐区' ? s.放逐区 : null;
+  const 数 = 是检视 ? 需求候选卡.length : (v.区 === '牌库' ? s.players[v.玩家].牌库张数 : (列表 ? 列表.length : 0));
+
+  const 注明 = 是检视 ? '401.5 / 检视效果：只有你看得到'
+    : v.区 === '牌库' ? '401.2/401.3：不能主动查看，只能清点张数'
+    : '公开区，任何时候都可以检视';
+  let h = '<div class="viewer"><div class="vhead"><b>' + esc(名) + '</b>'
+    + '<span class="dim">' + 数 + ' 张　' + 注明 + '</span><span class="spacer"></span>'
+
+    + (选择 && 选择.候选 && 选择.候选.size ? '<b>点一张计入选择</b>' : '')
+    + '<button onclick="' + 内联('关视图', 视图键(v)) + '">关闭</button></div><div class="vgrid">';
+  if (v.区 === '牌库') {
+
+    if (数 === 0) h += '<span class="dim">（空）</span>';
+    else {
+      h += '<div class="vrowlabel">牌库共 ' + 数 + ' 张（背面：你看不到内容）</div>';
+      for (let k = 0; k < 数; k++) h += '<div class="cardback"></div>';
+    }
+  } else if (!列表 || 列表.length === 0) h += '<span class="dim">（空）</span>';
+
+  else h += 列表.map((c) => {
+
+    const 在选 = !!(选择 && 选择.候选 && 选择.候选.size);
+    const 卡 = 卡牌(c, false, true);
+    if (!在选) return 卡;
+    const 可 = 选能动(c.uid);
+    if (!可) return '<span class="pickable 压黑">' + 卡 + '</span>';
+    const 选 = 已挑(c.uid);
+    return '<span class="pickable' + 框类(c.uid, true) + '"'
+      + ' onclick="' + 内联('点选', c.uid) + '">' + 卡 + '</span>';
+  }).join('');
+  return h + '</div></div>';
+}
+
+function 有人入座(s) { return (s.入座 || []).some((x) => x); }
+
+function 需要大厅(s) { return !令牌 || s.未入座 || s.废弃 || (!s.热座 && (!s.人齐 || !!s.等准备)); }
+
+function 大厅(s) {
+  const 入 = s.入座 || [null, null];
+  let x = '<div class="大厅"><h1>阵面对决 · 测试台</h1>';
+  if (s.废弃) {
+
+    x += '<p><b style="color:#e0a070">这一局已经结束</b> —— 有玩家在对局中离开了。<br>'
+      + '<span class="dim">本局不能继续，也不能让别人接手（否则新人会继承前一个人的手牌和场面）。</span></p>'
+      + '<button onclick="离座()">离开并回到大厅</button></div>';
+    return x;
+  }
+  if (令牌) {
+
+    x += '<p>' + 入.map((y, k) => '<span class="座' + (y ? ' 到' : '') + '">座位' + k + '：'
+      + (y ? esc(y.名字) + (y.在线 ? '' : '（掉线）') : '等待中…') + '</span>').join('') + '</p>';
+    const 对手掉线 = 入.some((y) => y && !y.在线);
+    x += 对手掉线
+      ? '<p><b style="color:#e0a070">对手掉线了</b> —— 他重开浏览器会自动回到这个座位；你也可以一直等。</p>'
+        + '<button class="次" onclick="离座()">离座</button>'
+      : '';
+
+  x += '<p><button class="次" onclick="打开组牌()">组牌／换牌</button>'
+    + '<span class="dim">—— 在准备之前改都来得及；保存后双方准备即生效</span></p>';
+  x += (s.人齐 && s.等准备)
+    ? '<p><button onclick="点了准备()">' + (状态.准备 && 状态.准备[状态.我的座位] ? '已准备（等对方）' : '我准备好了') + '</button>'
+      + '<span class="dim">—— 双方都准备后随机决定先后手，然后开始</span></p>'
+    : '';
+
+  x += s.人齐
+      ? '<p>房间 <b>' + esc(房间码) + '</b> —— 两位玩家都到齐了，各自点「我准备好了」就开始。</p>'
+      : '<p>等待另一位玩家加入……<br>把这个地址发给对方：<br><b>' + location.origin + '/?房间=' + esc(房间码) + '</b></p>';
+    x += '<button class="次" onclick="离座()">离座</button></div>';
+    return x;
+  }
+
+  x += '<p><input id="入座名" placeholder="你的名字" maxlength="12">'
+     + '<input id="入座令" placeholder="口令（没设就留空）"></p>';
+  x += '<p><b>房间列表</b> —— 点「加入」进已有的一局</p>';
+  if (!房间列表.length) x += '<p class="dim">现在还没有房间。点下面的「新建房间」开一局，再把链接发给对方。</p>';
+  else x += '<div class="房列表">' + 房间列表.map((r) => {
+    const 满 = r.入座.every((y) => y);
+    const 名字 = r.入座.map((y) => y ? y.名字 : '（空）').join('  /  ');
+    return '<div class="房行"><b>' + esc(r.号) + '</b><span>' + esc(名字) + '</span>'
+      + '<span class="dim">' + (满 ? '已满' : '第 ' + r.回合 + ' 回合') + '</span>'
+      + (满 ? '<span class="dim">不可加入</span>' : '<button onclick="' + 内联('入座到', r.号) + '">加入</button>')
+      + '</div>';
+  }).join('') + '</div>';
+  x += '<p><button onclick="入座到(\'\')">新建房间</button>'
+     + '<button class="次" onclick="热座()">单人热座（同屏调试）</button>'
+     + '<button class="次" onclick="去组牌()">组牌／换牌</button></p>';
+  return x + '</div>';
+}
+let 强制热座 = false;
+
+async function 热座() {
+
+  const 框 = document.getElementById('入座名');
+  const 名 = (框 && 框.value) || '调试者';
+  const r = await (await fetch('/api/入座', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 名字: 名, 热座: true }),
+  })).json();
+  if (!r.ok) { 提示(r.错误 || '进入热座失败'); return; }
+  令牌 = r.令牌; localStorage.setItem('zmdj令牌', 令牌); 我 = null; 房间码 = r.房间 || '';
+
+  if (事件源) { 事件源.close(); 事件源 = null; }
+  开推送();
+  强制热座 = false;
+  提示(null);
+  await 刷新();
+}
+
+function render() {
+  对齐选择状态();
+
+  if (组牌) {
+
+    const 记的 = 记住滚动();
+    document.getElementById('app').innerHTML = 组牌面板();
+    恢复滚动(记的);
+    return;
+  }
+  if (!强制热座 && 状态 && 需要大厅(状态)) { document.getElementById('app').innerHTML = 大厅(状态); return; }
+  if (!状态) return;
+  const s = 状态;
+  const p = s.当前请求 ? s.当前请求.玩家 : null;
+  可用牌 = new Set((s.合法动作 || []).filter((a) => a.uid != null).map((a) => a.uid));
+
+  任务 = 对齐会话(s);
+
+  {
+    const d0 = s.当前请求 && s.当前请求.决定;
+    const 决定键 = '搜寻|' + (s.当前请求?.玩家) + '|' + (d0?.标签 || '');
+
+    if (d0 && d0.类型 === '搜寻') {
+
+      会话.搜寻键 = 决定键;
+    }
+    if (!d0 || d0.类型 !== '搜寻') 会话.搜寻键 = null;
+  }
+
+  {
+
+    const 需0 = s.决定需求;
+    if (需0 && 需0.槽 && 需0.槽.length && !选择) {
+      const 并0 = new Set();
+      for (const z of 需0.槽) for (const k of 槽键(z)) 并0.add(k);
+      const 上0 = 需0.槽.reduce((n, z) => n + z.需.最大, 0);
+      开始选({ 名字: 需0.标题 || '', 源: 选源.区域, 候选: 并0,
+        槽表: 需0.槽.map((z) => ({ 名: z.名, 需: z.需, 候选: new Set(槽键(z)), 条件: z.条件, 量: 槽量表(z) })),
+        数量: { 最小: 0, 最大: 上0 }, 可放弃: false, 用途: null });
+    }
+  }
+
+  if (任务 && !选择) {
+
+    const 需0 = 任务.需求;
+
+    const 槽表给 = ((需0 && 需0.槽) || []).map((z) => ({
+      名: z.名, 需: z.需, 候选: new Set(槽键(z)), 条件: z.条件, 量: 槽量表(z),
+    }));
+    const 并集 = new Set();
+    for (const z of 槽表给) for (const k of z.候选) 并集.add(k);
+    const 表 = 建槽表();
+
+    if (!槽表给.length) {
+      槽表给.push(...表.map((z) => ({ 名: z.名, 需: z.需, 候选: z.候选 })));
+      for (const z of 表) for (const k of z.候选) 并集.add(k);
+    }
+    const 上限 = 槽表给.reduce((n, z) => n + z.需.最大, 0);
+    if (并集.size) 开始选({ 名字: 任务.说明 || '', 源: 选源.战场, 候选: 并集, 槽表: 槽表给,
+      数量: { 最小: 0, 最大: 上限 }, 可放弃: false, 已选: [...new Set(表.flatMap((z) => z.已选))],
+
+      用途: null });
+  }
+
+const 顶栏左 = '<div class="topbar"><b>阵面对决</b>'
+    + '<span>第 ' + s.turn + ' 回合</span>'
+    + (s.开局 && s.turn === 0 ? '<span class="dim">先手：' + esc(s.players[s.先手玩家].名字) + '</span>' : '')
+
+    + '<span>' + (p === null ? (s.开局 && s.当前请求 ? '开局中：' + esc(s.当前请求.步骤) : '—') : '当前：' + esc(s.players[p].名字)) + '</span>'
+    + '</div>';
+const 顶栏右 = '<div class="topbar">'
+    + '<span class="dim">' + esc(s.players[0].名字) + ' ' + s.players[0].体力 + '/' + s.players[0].体力上限 + '　'
+    + esc(s.players[1].名字) + ' ' + s.players[1].体力 + '/' + s.players[1].体力上限 + '</span>'
+
+      + '<button class="' + (s.AI代理 && s.AI代理[0] ? 'on' : '') + '"'
+      + ' title="' + esc(s.players[0].名字) + ' AI（AI 功能已移除）">'
+      + esc(s.players[0].名字) + ' AI</button>'
+      + '<button class="' + (s.AI代理 && s.AI代理[1] ? 'on' : '') + '"'
+      + ' title="' + esc(s.players[1].名字) + ' AI（AI 功能已移除）">'
+      + esc(s.players[1].名字) + ' AI</button>'
+    + (令牌 ? '<button class="次" onclick="离座()" title="离开这个房间；对局中离开会让本局作废">离座</button>' : '')
+    + '<button onclick="切布局()">布局</button>'
+    + '<button onclick="新局()">新开一局</button><button onclick="打开组牌()">组牌／换牌</button></div>';
+let h = '';
+
+  const 左栏html = '<div class="leftcol" data-块="左栏">' + 顶栏左
+    + '<div class="sharedbox" onclick="开查看(\'放逐区\',-1)" title="400：放逐区由所有玩家共享；406.3 明置且任何人都能检视">'
+    + '<span class="dim">放逐区</span><b>' + s.放逐张数 + '</b></div>'
+    + 堆叠行(s)
+    + '</div>';
+
+  const 我的位 = s.我的座位 == null ? 0 : s.我的座位;
+  const 对位 = (我的位 + 1) % s.players.length;
+  const 对手html = 半场(s, 对位, '对手');
+  const 我方html = 半场(s, 我的位, '我方');
+
+  const 视图们 = (视图 || []).map((v) => 区域视图html(s, v)).join('');
+  const 查看html = 视图们
+    ? '<div class="viewers" data-块="查看器">' + 视图们 + '</div>'
+    : '<div data-块="查看器" style="display:none"></div>';
+
+  const 板html = '<div class="board' + (任务 ? ' 选择中' : '') + '" data-块="战场">' + 对手html + 我方html + '</div>';
+  const 查看html块 = 查看html;
+  const 右栏html = '<div class="side" data-块="右栏">' + 顶栏右
+    + '<div class="detail" id="详情">' + 详情内容() + '</div>'
+
+    + '<div class="logbox" id="日志"></div></div>';
+
+  const 块 = [
+    { 名: '左栏', html: 左栏html },
+    { 名: '战场', html: 板html, 子: [{ 名: '对手半场', html: 对手html }, { 名: '我方半场', html: 我方html }] },
+    { 名: '查看器', html: 查看html块 },
+    { 名: '右栏', html: 右栏html },
+  ];
+
+  const 记的滚动 = 记住滚动();
+  const 日志原本贴底 = (() => { const x = document.getElementById('日志'); return !x || x.scrollTop + x.clientHeight >= x.scrollHeight - 4; })();
+  if (!铺区块(块)) {
+    document.getElementById('app').innerHTML = '<div class="wrap">' + 块.map((b) => b.html).join('') + '</div>';
+
+    const wrap0 = document.querySelector('#app > .wrap');
+    if (wrap0) for (const b of 块) {
+      const el = wrap0.querySelector('[data-块="' + b.名 + '"]'); if (el) el.__html = b.html;
+      for (const 子 of (b.子 || [])) { const e2 = wrap0.querySelector('[data-块="' + 子.名 + '"]'); if (e2) e2.__html = 子.html; }
+    }
+  }
+  恢复滚动(记的滚动);
+
+  同步日志(s.log, 日志原本贴底, s.log总数);
+
+}
+
+let 上次日志到 = -1;
+function 同步日志(行, 原本贴底, 总数) {
+  const el = document.getElementById('日志');
+  if (!el) { 上次日志到 = -1; return; }
+  const 起始 = Math.max(0, (typeof 总数 === 'number' ? 总数 : 行.length) - 行.length);
+  const 末尾 = 起始 + 行.length;
+  const 空白 = el.innerHTML === '';
+  if (空白 || 上次日志到 < 起始 || 上次日志到 > 末尾) {
+
+    el.innerHTML = esc(行.join('\n'));
+    上次日志到 = 末尾;
+    if (原本贴底 || 空白) el.scrollTop = el.scrollHeight;
+    return;
+  }
+  if (末尾 > 上次日志到) {
+    el.insertAdjacentHTML('beforeend', (上次日志到 > 起始 ? '\n' : '') + esc(行.slice(上次日志到 - 起始).join('\n')));
+    上次日志到 = 末尾;
+  }
+  if (原本贴底) el.scrollTop = el.scrollHeight;
+}
+
+const 可滚动选择器 = ['.logbox', '.zone .row', '.leftcol .stackrow .row', '.vgrid', '.opbar', '.deckcol', '.deckgrid', '.poolgrid', '.prewrap'];
+
+document.addEventListener('wheel', (e) => {
+  const el = e.target && e.target.closest && e.target.closest('.zone .row');
+  if (!el || el.scrollWidth <= el.clientWidth) return;
+  e.preventDefault();
+  el.scrollLeft += (e.deltaY || e.deltaX);
+}, { passive: false });
+
+const 设计宽 = 1280;
+function 适配屏幕() {
+
+  if (!document.body || !document.body.classList || !document.body.style ||
+      typeof window.innerWidth !== 'number' || typeof window.innerHeight !== 'number') return;
+  const 横 = window.innerWidth > window.innerHeight;
+
+  const 缩 = 横 ? Math.min(1, Math.max(320, window.innerWidth) / 设计宽) : 1;
+
+  document.documentElement.style.setProperty('--缩放', String(缩));
+  document.body.style.zoom = 缩 === 1 ? '' : String(缩);
+  document.body.classList.toggle('竖屏', !横);
+}
+window.addEventListener('resize', 适配屏幕);
+window.addEventListener('orientationchange', () => setTimeout(适配屏幕, 120));
+适配屏幕();
+
+function 铺区块(块) {
+  const app = document.getElementById('app');
+  const wrap = app && app.firstElementChild;
+  if (!wrap || !wrap.classList.contains('wrap')) return false;
+
+  for (const b of 块) {
+    const el = wrap.querySelector(':scope > [data-块="' + b.名 + '"]');
+    if (!el) return false;
+    if (el.__html !== b.html) {
+      el.outerHTML = b.html;
+
+      const 新 = wrap.querySelector(':scope > [data-块="' + b.名 + '"]');
+      if (新) 新.__html = b.html;
+    }
+
+    for (const 子 of (b.子 || [])) {
+      const 子el = wrap.querySelector('[data-块="' + 子.名 + '"]');
+      if (!子el) return false;
+      if (子el.__html !== 子.html) {
+        子el.outerHTML = 子.html;
+        const 新子 = wrap.querySelector('[data-块="' + 子.名 + '"]');
+        if (新子) 新子.__html = 子.html;
+      }
+    }
+  }
+  return true;
+}
+
+function 记住滚动() {
+  const 记的 = [];
+  for (const sel of 可滚动选择器) {
+    document.querySelectorAll(sel).forEach((el, i) => 记的.push([sel, i, el.scrollLeft, el.scrollTop]));
+  }
+  const ae = document.activeElement;
+  return { 滚动: 记的, 焦点: ae && ae.id ? ae.id : null,
+           选择: (ae && ae.selectionStart != null) ? [ae.selectionStart, ae.selectionEnd] : null };
+}
+
+function 恢复滚动(记的) {
+  if (!记的) return;
+  for (const [sel, i, sl, st] of 记的.滚动) {
+    const el = document.querySelectorAll(sel)[i];
+    if (el) { el.scrollLeft = sl; el.scrollTop = st; }
+  }
+  if (记的.焦点) {
+    const el = document.getElementById(记的.焦点);
+    if (el && el.focus) { el.focus(); if (记的选择 && el.setSelectionRange) { try { el.setSelectionRange(记的选择[0], 记的选择[1]); } catch {} } }
+  }
+}
+
+let 上次状态串 = null;
+
+function 状态串(s) {
+
+  return JSON.stringify([
+    s.turn, s.over, s.winner, s.开局, s.当前请求, s.合法动作, s.可见登记, s.AI代理, s.可支付来源,
+
+    s.准备, s.都准备, s.等准备, s.人齐, s.已开始,
+    s.放逐区, s.放逐张数, s.stack,
+
+    (s.log || []).length,
+    s.players.map((p) => [
+      p.体力, p.体力上限, p.支持, p.本回合已打领土,
+      p.手牌, p.手牌张数, p.隐藏手牌, p.阵地, p.阵地外, p.墓地, p.墓地对数, p.牌库张数,
+    ]),
+  ]);
+}
+
+function 提示(文) {
+  const d = document.getElementById('错误');
+  d.textContent = 文; d.style.display = 'block';
+  setTimeout(() => { d.style.display = 'none'; }, 3500);
+}
+
+let 可用牌 = new Set();
+
+let 房间码 = (new URLSearchParams(location.search).get('房间') || '').toUpperCase();
+
+function 设房间码(v) { 房间码 = (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); }
+
+let 我 = null;
+let 入座中 = false;
+const 带令 = (u) => 令牌 ? u + (u.indexOf('?') >= 0 ? '&' : '?') + '令牌=' + encodeURIComponent(令牌) : u;
+
+function 选牌(uid) {
+
+  if (选择) { if (选点(uid)) render(); return; }
+
+  if (任务) { 点选(uid); return; }
+
+  const d0 = 状态 && 状态.当前请求 && 状态.当前请求.决定;
+  if (d0 && d0.类型 === '调度执行') {
+    const p = 状态.当前请求.玩家;
+
+    if (选择 && 选点(uid)) render();
+    return;
+  }
+  选中 = (选中 === uid ? null : uid); 待选 = null; 会话.模式 = null; render();
+}
+
+function 选模式(i) { 会话.模式 = i; render(); }
+
+function 组装宣告(d, 规格) {
+  const 目标 = [];
+  for (const sp of 规格 || []) {
+
+    for (const uid of [...new Set([...(宣告选[sp.目标名] || [] || []), ...(选择 ? 已选全() : [])])]) {
+
+      if (typeof uid === 'string' && uid.startsWith('玩家')) {
+        目标.push({ 目标名: sp.目标名, 类型: '玩家', 玩家: Number(uid.slice(2)) }); continue;
+      }
+      const c = sp.候选.find((x) => x.uid === uid);
+      if (c) 目标.push({ 目标名: sp.目标名, 类型: c.类型, uid: c.uid, 玩家: c.玩家 });
+    }
+  }
+  return { 种类: '宣告', 模式: d.模式候选 ? 会话.模式 : undefined, 目标 };
+}
+
+function 确认宣告() {
+  const d = 状态.当前请求.决定;
+  const 规格 = d.模式候选
+    ? (((d.模式候选.find((x) => x.索引 === 会话.模式) ?? d.模式候选[0]) || {}).规格 || [])
+    : (d.规格 || []);
+  动作(组装宣告(d, 规格));
+  宣告选 = {};
+}
+
+async function 动作(体) {
+  const r = await (await fetch('/api/action', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(带令牌(体)),
+  })).json();
+  if (r.状态) 状态 = r.状态;
+  待选 = null; 会话.模式 = null;
+
+  选中 = null; 悬停 = null;
+
+  if (r.ok) 选择 = null;
+  if (!r.ok) 提示(r.错误 || '这个动作不合法');
+  render();
+}
+
+function 点动作(idx) {
+  const a = 状态.合法动作[idx];
+  if (!a) return;
+
+  清掉选择();
+
+  if (!(a.需求 && (a.需求.槽 || []).length)) {
+    const 发 = 填模板(a.需求, a);
+    if (发) return 动作(发);
+  }
+
+  if (a.种类 === '转移' || a.种类 === '启动能力' || a.种类 === '发起战斗' || a.种类 === '施放') {
+    待选 = { 动作: a };
+    选中 = null;
+    return render();
+  }
+}
+
+async function 新局() {
+
+  const r = await (await fetch('/api/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(带令牌({})) })).json();
+  if (!r || !r.players) { 提示((r && r.错误) || '新开一局失败'); return; }
+  状态 = r;
+  选中 = null; 待选 = null; 悬停 = null; 会话.模式 = null; 宣告选 = {}; render();
+}
+
+async function 打开组牌() {
+  const r = await (await fetch('/api/pool' + (令牌 ? '?令牌=' + encodeURIComponent(令牌) : ''))).json();
+  组牌 = r.池;
+  组牌选 = null;
+  组牌.侧 = (状态 && 状态.我的座位 === 1) ? '乙' : '甲'; 组牌.校验甲 = 组牌.校验甲 || { 错误: [], 警告: [] }; 组牌.校验乙 = 组牌.校验乙 || { 错误: [], 警告: [] };
+  组牌.无限制 = !!r.池.无限制; 选中 = null; 待选 = null; render();
+}
+
+function 切换组牌侧() { 组牌.侧 = 组牌.侧 === '甲' ? '乙' : '甲'; 组牌选 = null; render(); }
+
+function 切换无限制() { 组牌.无限制 = !组牌.无限制; render(); }
+
+function 加牌(id) { 组牌[组牌.侧].push(id); render(); }
+
+function 减牌(侧, id) { const i = 组牌[侧].indexOf(id); if (i >= 0) 组牌[侧].splice(i, 1); render(); }
+
+function 清空(s) { 组牌[s] = []; render(); }
+
+async function 保存牌组() {
+
+  const 侧 = 组牌.侧;
+  const r = await (await fetch('/api/decks', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(带令牌({ 侧, 牌: 组牌[侧], 无限制: !!组牌.无限制 })),
+  })).json();
+  if (r.校验) 组牌['校验' + 侧] = r.校验;
+  if (r.池) { 组牌.甲 = r.池.甲; 组牌.乙 = r.池.乙; 组牌.无限制 = r.池.无限制; }
+  提示(r.ok ? 侧 + '组已保存到本房间 —— 点「新开一局」生效' : (r.错误 || ['组牌不合法']).join('；'));
+  render();
+}
+
+let 房间列表 = [];
+
+async function 载入房间列表() {
+  try { const r = await (await fetch('/api/房间')).json(); 房间列表 = r.房间 || []; } catch {}
+}
+
+async function 点了准备() {
+  const r = await (await fetch('/api/准备', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(带令牌({ 准备: !(状态.准备 && 状态.准备[状态.我的座位]) })),
+  })).json();
+  if (r.状态) 状态 = r.状态;
+  if (!r.ok) 提示(r.错误 || '准备失败');
+  render();
+}
+
+async function 入座到(房间号) {
+  const 名 = (document.getElementById('入座名') || {}).value || '';
+  const 令 = (document.getElementById('入座令') || {}).value || '';
+  入座中 = true;
+  const r = await (await fetch('/api/入座', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 名字: 名, 口令: 令, 令牌, 房间: 房间号 || undefined }),
+  })).json();
+  入座中 = false;
+  if (!r.ok) { 提示(r.错误 || '入座失败'); return; }
+  令牌 = r.令牌; localStorage.setItem('zmdj令牌', 令牌); 我 = r.座位; 房间码 = r.房间 || '';
+
+  if (事件源) { 事件源.close(); 事件源 = null; }
+  开推送();
+  提示(null);
+  await 刷新();
+}
+
+async function 导入套牌文件(inp) {
+  const f = inp.files && inp.files[0];
+  inp.value = '';
+  if (!f || !组牌) return;
+  let 文本 = '';
+  try { 文本 = await f.text(); } catch (err) { 提示('读文件失败：' + err.message); return; }
+
+  const 主区 = (文本.match(/<zone name="main">([\s\S]*?)<\/zone>/) || [])[1] ?? 文本;
+  const 有 = new Set(组牌.卡池.map((c) => c.id));
+  const ids = []; const 缺 = [];
+  for (const m of 主区.matchAll(/<card number="(\d+)" name="([^"]+)"/g)) {
+    const 数量 = Number(m[1]);
+    const 原名 = m[2];
+    const k = 原名.match(/^\[([^·]+)·([^\]]+)\](.*)$/);
+    const id = k ? k[1] + '-' + k[2] : '';
+    if (!id || !有.has(id)) { 缺.push(原名); continue; }
+    for (let i = 0; i < 数量; i++) ids.push(id);
+  }
+  if (!ids.length) { 提示('这个文件里没有能认出来的主牌' + (缺.length ? '（' + 缺.slice(0, 5).join('、') + '…）' : '')); return; }
+  组牌[组牌.侧] = ids;
+  render();
+  提示('已导入 ' + f.name + '：' + ids.length + ' 张' + (缺.length ? '，' + 缺.length + ' 种没认出来（' + 缺.slice(0, 3).join('、') + '…）' : '')
+    + '　—— 正在保存到本房间');
+  await 保存牌组();
+}
+
+async function 去组牌() {
+  if (!令牌) await 热座();
+  if (!令牌) return;
+  await 打开组牌();
+}
+
+async function 离座() {
+
+  const 开局了 = 状态 && 状态.turn > 0;
+  if (开局了 && !confirm('对局进行中。离座后这个座位会被释放，对手会看到你掉线。\n确定要离座吗？')) return;
+  await fetch('/api/离座', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ 令牌 }) });
+  令牌 = ''; localStorage.removeItem('zmdj令牌'); 我 = null;
+  if (事件源) { 事件源.close(); 事件源 = null; }
+  开推送();
+  await 刷新();
+}
+
+let 事件源 = null;
+let 推送状态 = '未连';
+let 推送收到 = 0;
+
+function 开推送() {
+
+  if (事件源) return;
+  try {
+    事件源 = new EventSource('/api/events' + (令牌 ? '?令牌=' + encodeURIComponent(令牌) : ''));
+    事件源.onopen = () => { 推送状态 = '已连'; render(); };
+    事件源.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+
+        推送收到++;
+        if (d.大厅) { 房间列表 = d.房间 || []; render(); return; }
+        状态 = d;
+        我 = 状态.我的座位;
+        if (!待选 && !会话.模式) render();
+      } catch {  }
+    };
+
+    事件源.onerror = () => { 推送状态 = '断开'; 上次状态串 = null; render(); };
+  } catch { 事件源 = null; }
+}
+
+async function 刷新() {
+  try {
+    状态 = await (await fetch(带令('/api/state'))).json();
+    我 = 状态.我的座位;
+    if (!令牌 || !状态.人齐) await 载入房间列表();
+
+    const 变了 = 状态串(状态) !== 上次状态串;
+    if (变了 && !待选 && !会话.模式) render();
+  } catch {}
+}
+
+(async () => {
+  try {
+    状态 = await (await fetch(带令('/api/state'))).json();
+    我 = 状态.我的座位;
+    await 载入房间列表();
+    render();
+    if (decodeURIComponent(location.search).indexOf('组牌') >= 0) await 打开组牌();
+
+    const 查 = new URLSearchParams(location.search).get('查看');
+    if (查) { const [区, 位] = 查.split(':'); 开查看(区, 位 == null ? -1 : Number(位)); }
+
+    开推送();
+    setInterval(刷新, 8000);
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) 刷新(); });
+  } catch (e) {
+    document.getElementById('app').innerHTML = '<pre style="color:#e07070">载入失败：' + e
+      + '\n\n如果你是用 file:// 直接打开的，请改用 http://127.0.0.1:8787</pre>';
+  }
+})();
+</script>
+</body>
+</html>
