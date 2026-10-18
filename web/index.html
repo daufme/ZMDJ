@@ -10,33 +10,40 @@
     --ink:#2b1c0e; --cream:#f7f1e2; --cream2:#eee4cf;
     --p0:#2f7d4f; --p1:#a83232; --accent:#ffd479; --dim:#d8c39a; --bad:#e07070;
 
+    /* ── 卡尺寸：**只定高度**，宽度由卡图比例算出来（484:682 ≈ 0.71）──────────
+       所有地方的牌都用这一套，改一处就整体缩放。上下限防止极端窗口下太小/太大。
+       阵地故意比其它区域**小**（它占的是最宝贵的横向空间，一行五个）。 */
     --卡比: 484 / 682;
-    --卡高-阵地: clamp(76px, 8.6vh, 116px);
-    --卡高-区域: clamp(84px, 10.2vh, 138px);
+    --卡高-阵地: clamp(76px, 8.6vh, 116px);    /* 阵地：比其它区域**小**（一行五个，横向最挤） */
+    --卡高-区域: clamp(84px, 10.2vh, 138px);   /* 手牌/墓地/牌库/放逐区：比阵地大 */
     --卡高-堆叠: clamp(48px, 6.2vh, 84px);
-    --卡高-查看: clamp(104px, 14vh, 176px);
-
+    --卡高-查看: clamp(104px, 14vh, 176px);    /* 查看器里最大（要看清楚） */
+    /* 半场两侧的牌库/墓地那一栏的宽度 */
     --侧栏宽: clamp(92px, 8.6vw, 132px);
-
+    /* 左栏（放逐区 + 堆叠）的宽度 */
     --左栏宽: clamp(126px, 11vw, 196px);
   }
   *{ box-sizing:border-box; }
   html,body{ height:100%; overflow:hidden; }
   body{ margin:0; color:#f3ead8; font:12px/1.4 "Microsoft YaHei","PingFang SC",system-ui,sans-serif;
         background:radial-gradient(circle at 30% -10%, #57351a, #241407 65%) #241407; }
-
+/* 顶栏已经拆进左右栏了，这里只剩 .wrap 一个孩子 */
   #app{ height:calc(100vh / var(--缩放, 1)); display:flex; flex-direction:column; padding:6px 8px; gap:6px; }
-
+/* ── 手机（横屏原样）────────────────────────────────────────────────
+   桌面这套是 1280 宽、三栏的密集布局 ✓；手机不做重排（用户定：**原样横屏就行** ✓），
+   而是整体等比缩小（脚本设 `body.zoom` ✓）→ 版式一模一样 ✓，只是字小一点 ✓。
+   竖屏时提示转屏 ✓（横屏才好玩 ✓）。 */
 #转屏提示{ display:none; position:fixed; inset:0; z-index:99; background:var(--panel);
   color:var(--ink); align-items:center; justify-content:center; text-align:center; font-size:20px; line-height:1.8; }
 body.竖屏 #转屏提示{ display:flex; }
-
+/* 窄屏时把查看器/面板的内边距收一点 ✓（缩过之后更省地方） */
 @media (max-width:820px){
   .viewer{ padding:6px !important; }
   .opbar{ padding:4px 6px !important; gap:4px !important; }
   .act{ padding:3px 6px !important; font-size:12px !important; }
 }
-
+  /* 按钮：**一套样式**。原来基础样式是深棕渐变，而 .大厅 button 是亮金色 ——
+     同一个界面里两种观感，战场里的按钮看着像「黑着不能点」。统一成亮的。 */
   button{ background:linear-gradient(#8a5a28,#633d16); color:#fff3dd; border:1px solid #a8834a;
           border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit;
           box-shadow:0 1px 2px rgba(0,0,0,.35); }
@@ -45,7 +52,9 @@ body.竖屏 #转屏提示{ display:flex; }
   button.on{ border-color:#ffe9a8; color:#2b1c0e; background:linear-gradient(#ffd479,#e8b455); font-weight:700; }
   .dim{ color:var(--dim); }
   button:disabled{ opacity:.45; cursor:not-allowed; }
-
+  /* 顶栏：**拆成左右两半**，各自待在自己那一栏的顶部。
+     中间什么都不放 —— 战场（board）因此能从**最顶上**开始，多出一整条顶栏的高度。
+     （<header> 这个标签现在只有组牌面板在用。） */
   .topbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; min-height:28px; flex:none;
            background:linear-gradient(#4a2d14,#331e0c); border:1px solid var(--line);
            border-radius:6px; padding:3px 8px; font-size:11px; }
@@ -57,119 +66,164 @@ body.竖屏 #转屏提示{ display:flex; }
   header b{ color:var(--accent); font-size:13px; }
   header .spacer{ flex:1; }
 
+  /* 三栏：左（放逐区 + 堆叠）| 中（战场）| 右（详情 + 日志）
+     放逐区和堆叠挪到左边之后，中间只留两个半场，横向空间全给阵地。 */
   .wrap{ flex:1; display:grid; grid-template-columns:var(--左栏宽) 1fr 330px; gap:8px; min-height:0;
-         position:relative; }
-
+         position:relative; }      /* ← 查看器的定位参照（它是 .wrap 的孩子，不是 .board 的） */
+  /* 左栏：放逐区固定高度，堆叠占剩下的（牌多了自己滚） */
   .leftcol{ display:flex; flex-direction:column; gap:6px; min-height:0; }
-  .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }
+  .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }   /* 顶栏右半也在这 */
   .leftcol .sharedbox{ flex:none; flex-direction:column; align-items:flex-start; gap:2px; }
   .leftcol .stackrow{ flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; margin-bottom:0; }
   .leftcol .stackrow .row{ flex-wrap:wrap; align-content:flex-start; overflow-y:auto; overflow-x:hidden; }
-
+  /* .empty 是给浅色战场写的（深棕色），在深色的堆叠框里看不见 —— 这里单独给一份 */
   .stackrow .empty{ color:#b8a37c; font-size:10.5px; padding:3px 2px; }
-
+  /* 堆叠上的「能力」（114.9，没有牌）：画成一个小小的方块，能点 */
   .cap{ display:block; width:100%; box-sizing:border-box; padding:3px 5px; border:1px solid #7a5a2a;
         border-radius:4px; background:linear-gradient(#4a3418,#33230f); color:#e8d9b4; font-size:10px;
         line-height:1.3; word-break:break-all; }
   .cap.候选{ cursor:pointer; filter:brightness(1.3); border-color:var(--accent); }
   .cap.选好{ outline:2px solid var(--accent); outline-offset:1px; filter:brightness(1.25); }
   .board{ display:flex; flex-direction:column; min-height:0; position:relative; }
-
+  /* 堆叠行：正被打出的牌，可点（无懈可击的目标） */
   .stackrow{ background:linear-gradient(160deg,#3a2a16,#2b1d10); border:2px solid #7a5a2a; border-radius:6px;
              padding:2px 6px 4px; margin-bottom:4px; flex:none; }
   .stackrow .row{ display:flex; gap:6px; align-items:flex-start; min-height:40px; }
   .stackrow .card{ height:var(--卡高-堆叠); }
 
+  /* 半场内部的区块**按比例分满高度**。
+     ⚠ 以前是 align-content:start —— 内容排完就停，底下空一截（对面那半场最明显）。 */
+  /* ⚠ `flex:1` = `flex:1 1 0` —— 两个半场被**硬切成一模一样高**。
+     可我方半场里多了一条操作条，那多出来的一条就只能从我方半场里挤，
+     结果是**两边的阵地不一样高**、中线也不在中线上。
+     改成 `flex:1 1 auto`：基准 = 各自的内容高，多余的空间再对半分 ——
+     于是两边的差别只剩那条操作条，阵地一样高、中线就是中线。 */
   .half{ background:linear-gradient(160deg,var(--mat2),var(--mat)); border:2px solid #3d230e;
          padding:3px 8px; display:grid; gap:3px 8px; min-height:0; flex:1 1 auto;
          align-content:stretch; overflow:hidden; }
-
+  /* ⚠ 不要用 align-self:stretch 把每一行都拉高 ——
+     「阵地」那行会被拉高，而格子只有 --卡高-阵地 高，行里就空出一截。
+     改成**显式行权重**：余量只给「手牌」那行，其它按内容高。 */
   .half > *{ min-height:0; }
-
+  /* 行权重：**一行不换行的区域按内容高，余量全给「阵地」**。
+     手牌 / 领土 / 战场·阵略战器都是 `flex-wrap:nowrap` 横向滚动的一行 ——
+     牌再多也只有一行，给它们留高度等于白留，所以高度就是一张卡。
+     对手半场：手牌(auto) 牌堆+中场(auto) 阵地(1fr)
+     我方半场：阵地(1fr) 中场+牌堆(auto) 操作条(auto) 手牌(auto) */
   .half.opp{ grid-template-rows:auto auto 1fr; }
   .half.me{ grid-template-rows:1fr auto auto auto; }
   .half.me{ grid-template-columns:1fr var(--侧栏宽); border-radius:0 0 8px 8px; border-top:1px dashed rgba(255,255,255,.18); }
   .half.opp{ grid-template-columns:var(--侧栏宽) 1fr; border-radius:8px 8px 0 0; border-bottom:none; }
-
+  /* 谁在行动看操作区那一条就够了（「X 的优先权」），半场不再描边 */
+  /* 中场（领土 / 战场·阵略战器）：**吃掉半场的余量** —— 这两块才是牌数会变的地方 */
   .mid2{ display:grid; grid-template-columns:1fr 1fr; gap:6px; min-width:0; align-content:stretch; }
   .mid2 > *{ display:flex; flex-direction:column; }
   .mid2 .zone{ flex:1; }
   .mid2 > *{ min-width:0; }
   .half > *{ min-width:0; }
   .zlabel{ color:#40280f; font-size:10px; letter-spacing:.1em; font-weight:700; }
-
+  /* 区域盒子：**永远占一块地方**（哪怕里面是空的）——
+     不然「开局一张手牌都没有」时手牌区整个不存在，看不出那里该放手牌。 */
+  /* 区域盒子：**永远占一块地方**（哪怕里面是空的）——
+     不然「开局一张手牌都没有」时手牌区整个不存在，看不出那里该放手牌。
+     高度按内容（一张卡 + 12px），**不主动吃余量** —— 余量留给所在的行去分。 */
   .zone{ background:rgba(64,40,15,.16); border:1px dashed rgba(64,40,15,.5); border-radius:5px; padding:2px;
          display:flex; flex-direction:column; min-height:calc(var(--卡高-区域) + 12px); }
   .zone .row{ display:flex; gap:12px; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
               flex:1; align-items:flex-start; }
-
+  /* 滚动条藏掉：这些区域一行不换行，横向溢出一律用**滚轮**左右移（见下面的 wheel 监听）。
+     显式滚轮条会占掉一截高度，而这里最缺的就是高度。 */
   .zone .row{ scrollbar-width:none; }
   .zone .row::-webkit-scrollbar{ display:none; }
   .empty{ color:rgba(64,40,15,.65); font-size:10px; }
 
+  /* 阵地：格子只比卡大一点点（边框 + padding），高度跟着 --卡高-阵地 走 */
+  /* 阵地：一行五个，**紧贴中线**（对手那半场排在最底、我方排在最顶，见 半场() 的内容顺序）
+     align-content:start —— 格子不能被拉高（高度是 --卡高-阵地） */
+  /* ⚠ 阵地那一行会**吃余量**（见上面的行权重）。所以格子必须**跟着那一行长** ——
+     否则行变高了、格子还是老高度，多出来的高度就只是空白（「阵地空间没用上」）。
+     `grid-auto-rows:1fr` + 格子 height:100%，把这一行的高度分给五个格子。
+     min-height 留一个下限：窗口很矮的时候阵地不能塌成一条线。 */
   .slots{ display:grid; grid-template-columns:repeat(5,1fr); gap:clamp(4px, .8vw, 10px);
           grid-auto-rows:1fr; align-content:stretch;
-
+          /* ⚠ **这一条是关键**：`.slots` 自己必须是 100% 高，`grid-auto-rows:1fr` 才有东西可分。
+             它是 auto 高的话，1fr 只是「内容高」，格子就永远长不大 —— 上面那些设置全白写。
+             外层那个 grid-column:1/-1 的 div 会跟着阵地那一行拉伸，所以 100% 有依据。 */
           height:100%; }
   .slot{ background:rgba(64,40,15,.16); border:1px dashed rgba(64,40,15,.5); border-radius:5px;
          box-sizing:border-box;
          height:100%; min-height:calc(var(--卡高-阵地) + 8px);
          display:flex; align-items:center; justify-content:center; padding:2px; }
-
+  /* 阵地格子：名字（左边路/左侧翼/…）垫在中间，有牌时牌盖在上面 */
+  /* ⚠ 这层只是 grid 里的一格；**不要用 display:flex** ——
+     那会让里面的 .slot 没有宽度、塌成内容宽，阵地名就被挤成一列竖着的字了。 */
   .slotwrap{ min-width:0; }
   .slotwrap > .slot{ width:100%; }
   .slot .vn{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
              color:rgba(64,40,15,.55); font-size:11px; font-weight:700; letter-spacing:.1em;
              pointer-events:none; }
-
+  /* ⚠ 这一层必须 height:100% —— 卡片是 height:100% 跟着它算的；
+     容器 auto 高的话，100% 会退回 auto，牌就不跟格子长了（只剩一块空白）。 */
   .slot .slotcard{ position:relative; z-index:1; display:flex; height:100%;
                    align-items:center; justify-content:center; }
   .slot{ position:relative; }
-  .slotname{ display:none; }
+  .slotname{ display:none; }      /* 老的名字行已经不用了 */
 
+  /* 卡：图片区固定高度，关键信息压在图上 */
+  /* 卡：卡图盖满整张卡，关键信息压在图上 */
+  /* ⚠ flex:0 0 auto 是必须的：不写的话，一行里牌多了会被 flex 横向压扁，
+     而高度是写死的 → **卡框比例被破坏**，里面的 background-size:cover 一裁就变形。 */
   .card{ position:relative; overflow:hidden; cursor:pointer;
          height:var(--卡高-区域); width:auto; aspect-ratio:var(--卡比); flex:0 0 auto;
          border:2px solid var(--line); border-radius:5px;
          background:repeating-linear-gradient(45deg,#c9bb9a,#c9bb9a 6px,#d8cdb0 6px,#d8cdb0 12px); }
   .card.p0{ border-color:var(--p0); }
-
+  /* 卡背：隐藏手牌用（401/402） */
   .card.back{ background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center;
               cursor:default; border-color:#4a3a22; }
   .card.back:hover{ filter:none; }
   .card.p1{ border-color:var(--p1); }
   .card.sel{ outline:2px solid var(--accent); outline-offset:1px; }
-
+  /* 统一选择模型：候选 = 可点，选好 = 已选中。**不加光效**，靠亮度区分 */
   .card.候选{ cursor:pointer; filter:brightness(1.18); }
-
+  /* 选阵地：整块阵地格子可点（点有人的 = 替任它，301.9） */
+  /* 阵地：**空位置**没法用「压黑」表达可选 ✗ —— 它必须靠框线：
+     可放的虚线框、已选的实线框（卡牌那边才是「不可选的压黑」✓） */
   .slot.候选{ cursor:pointer; outline:2px dashed var(--accent); outline-offset:2px; filter:brightness(1.2); }
   .slot.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
-
+  /* 已选 = 边框亮（和 173 行 .card.sel 一个表达 ✓）—— 面朝上/暗置的牌**看起来一样** */
   .card.选好{ outline:2px solid var(--accent); outline-offset:-2px; filter:brightness(1.25); }
-
+  /* 有选择任务时，没被选中的牌一律压暗（和「不能用」同一套观感） */
   .board.选择中 .card:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
-
+  /* 「不可点」统一用压黑表达（你定的）：这三条管 阵地 / 牌堆 / 堆叠条目 */
+  /* ⚠ 不压黑 .slot —— 单位卡坐在 slot 里，卡自己是候选也被连带压黑了 ✗；
+     卡那层的压黑由上面 .card:not(候选) 那条管 ✓ */
   .board.选择中 .pile:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
   .board.选择中 .cap:not(.候选):not(.选好){ opacity:.4; }
-
+  /* 横置：直接把卡转 90 度表现出来（缩小一点免得压到相邻的卡） */
   .card.isTapped{ transform: rotate(90deg) scale(0.82); margin: 0 5px; }
-
+  /* 优先权下：正在行动的那半场里，判断哪些牌能用。
+     **不做任何边框光效** —— 只把不能用的压暗，靠对比反衬。
+     不放大、不位移（一放大就会超出所在行的高度）。 */
   .half.有可用 .card{ transition: filter .12s; }
-
+  /* ⚠ 要排除「选择任务的候选」：一张地可能既是候选又不是「可用」（比如这回合已经打过地了），
+     那样它会被这条压暗 —— 但它是可以点的，看起来就「黑着却能点」。 */
   .half.有可用 .card:not(.可用):not(.候选):not(.选好){ filter: brightness(.5) saturate(.65); }
-
+  /* 查看器（墓地/牌库/放逐区）里的牌不参与这套明暗 */
   .vgrid .card, .vgrid .card:not(.可用){ filter: none; }
   .row .card{ height:var(--卡高-区域); }
-
+  /* 阵地里的卡**跟着格子长**（height:100% + 基类的 aspect-ratio 自动定宽）—— 这样行变高就是牌变大，
+   不是多出一块空白。上限由格子的宽度兜着（五个格子分半场宽）。 */
   .slot .card{ height:100%; max-height:100%; }
-
+  /* 卡框比例已经和卡图一致（--卡比），所以 cover 不会裁掉内容 */
   .card .art{ position:absolute; inset:0; background-size:cover; background-position:center; }
   .card .cst, .card .fac, .card .pt, .card .dmg{
     position:absolute; border-radius:3px; padding:0 3px; font-size:9px; font-weight:700;
     background:rgba(0,0,0,.66); color:#ffe9b0; text-shadow:0 1px 2px rgba(0,0,0,.9); }
-
+  /* 205.1 势力印在左上；203 打出费用 / 106.1 势力支持印在右上 */
   .card .fac{ top:1px; left:1px; background:rgba(24,14,6,.8); color:#ffd479; }
   .card .cst{ top:1px; right:1px; }
-
+  /* 数值放在名牌**上方**：名牌是从透明到 86% 黑的渐变，压在最底部会把数值糊掉 */
   .card .pt{ bottom:34px; right:3px; z-index:5; }
   .card .dmg{ bottom:1px; left:1px; color:#ff9d9d; }
   .card .plate{ position:absolute; left:0; right:0; bottom:0; padding:12px 3px 2px;
@@ -178,17 +232,17 @@ body.竖屏 #转屏提示{ display:flex; }
              text-shadow:0 1px 2px #000; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .card .ty{ font-size:8px; color:#e3d6bb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .card .tags{ display:flex; gap:2px; flex-wrap:wrap; margin-top:1px; }
-
+  /* 右下角：印在牌上的原始武力/体力 —— 写清楚、加大 */
   .card .pt{ font-size:13px; font-weight:800; color:#fff8e6; background:rgba(18,10,4,.92);
              border:1px solid #c9a05a; border-radius:9px; padding:1px 7px; line-height:18px;
              text-shadow:0 1px 3px #000; box-shadow:0 2px 6px rgba(0,0,0,.8); }
-
+  /* 数值里的增减：+X 绿、-X 红、已受伤（已失去的体力）又是另一种颜色（都跟在印制值后面） */
   .card .pt b{ font-weight:800; }
   .card .pt b.up{ color:#8cf0a8; }
   .card .pt b.dn{ color:#ff9d9d; }
   .card .pt b.hurt{ color:#fff; background:#a3232b; border:1px solid #ff8a8a;
                     border-radius:8px; padding:0 4px; margin-left:3px; font-size:11px; }
-
+  /* 其他标记（灵值、天命…）：左上角一套独立渲染 */
   .card .mk{ position:absolute; top:20px; left:2px; z-index:4; display:flex; flex-direction:column; gap:2px; }
   .card .mk span{ background:#4a2f6b; border:1px solid #c79fe0; color:#f3e8ff; font-weight:800;
                   border-radius:9px; padding:0 5px; font-size:10px; line-height:14px;
@@ -196,20 +250,35 @@ body.竖屏 #转屏提示{ display:flex; }
   .card .tag{ background:rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.35); color:#fff;
               border-radius:2px; padding:0 2px; font-size:8px; }
   .card .tag.kw{ background:rgba(140,90,32,.85); border-color:#ffd479; color:#ffe9c0; }
-  .zoneboxrow{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .zoneboxrow{ display:flex; gap:6px; }
+  /* ★ 手牌行：手牌区（左，可伸缩）+ 玩家框（右，固定宽，同高） */
+  .handrow{ display:flex; gap:8px; align-items:stretch; }
+  .handcol{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+  .playerbox{ flex:0 0 var(--侧栏宽); display:flex; flex-direction:column; justify-content:center; gap:4px;
+              background:rgba(64,40,15,.16); border:1px solid rgba(64,40,15,.5); border-radius:5px; padding:4px 6px; }
   .zonebox.backimg{ background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center; }
-  .zonebox{ position:relative; height:100%; max-height:62px; width:auto; aspect-ratio:484/682; border:2px solid var(--line); border-radius:5px; cursor:pointer;
+  .zonebox{ position:relative; height:var(--卡高-区域); max-height:none; width:auto; aspect-ratio:484/682; border:2px solid var(--line); border-radius:5px; cursor:pointer;
             display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
             background:repeating-linear-gradient(45deg,#4a2d14,#4a2d14 5px,#3a2410 5px,#3a2410 10px); }
   .zonebox:hover{ border-color:var(--accent); }
-  .zonebox.deck{ background:repeating-linear-gradient(135deg,#2a3a5a,#2a3a5a 5px,#1e2a42 5px,#1e2a42 10px); }
-  .zonebox .zb-label{ font-size:9px; color:var(--dim); }
-  .zonebox .zb-count{ font-size:14px; font-weight:700; color:#f3ead8; }
+  /* ⚠ 用 background-color 而不是 background 简写：简写会清掉 background-image，把牌库的卡背盖掉 */
+  .zonebox.deck{ background-color:#2a3a5a; }
+  .zonebox .zb-label{ font-size:10px; color:var(--dim); }
+  .zonebox .zb-count{ font-size:18px; font-weight:700; color:#f3ead8; }
+  /* 标签/张数要压在牌面上，加一层暗底保证可读 */
+  .zonebox .zb-label, .zonebox .zb-count{ position:relative; z-index:2; background:rgba(0,0,0,.55); padding:0 5px; border-radius:3px; }
   .sharedbox{ display:flex; align-items:center; gap:8px; cursor:pointer; border:1px solid var(--line);
               border-radius:5px; padding:3px 8px; background:linear-gradient(#3a2410,#2c1a0a); flex:none; }
   .sharedbox:hover{ border-color:var(--accent); }
   .sharedbox b{ color:#f3ead8; }
-
+  /* 查看器：盖住**中间那一列**（战场），左右两栏照旧露着。
+     ⚠ 它是 .wrap 的孩子（不是 .board 的）—— 这样开关它只重建自己，
+       不会连累两个半场重建（卡图闪、滚动丢）。
+       位置就按 .wrap 的三列算：左让开左栏，右让开右栏，各多让一个 gap。 */
+  /* 查看器：**别铺满** —— 固定在右侧一个方块里（选择时还要能看见战场与操作条） */
+  /* ⚠ **额外区域与主界面「逻辑上平级」** ✓（用户定的）：它不是「谁把谁顶掉」的浮层 ✗，
+     而是**同一格里可以同时装好几块**的地方 —— 这一步的选择面板 + 玩家打开的区域视图（可以多个）✓。
+     具体摆在哪由屏幕大小决定（现在：右侧一个方块里纵向排，各自滚动 ✓）。 */
   .viewers{ position:absolute; top:6%; right:calc(330px + 8px); width:min(46%, 560px); max-height:84%;
             z-index:20; display:flex; flex-direction:column; gap:8px; overflow:auto; }
   .viewer{ max-height:70vh; padding:10px 12px; border-radius:8px; border:1px solid #8a6a3a;
@@ -219,11 +288,11 @@ body.竖屏 #转屏提示{ display:flex; }
   .viewer .vgrid{ flex:1; overflow:auto; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; }
   .viewer .card{ height:var(--卡高-查看); }
   .viewer .pickable{ display:inline-block; }
-
+  /* 选择时：不符合条件的牌压黑、且点不动（可点只挂在 候选 那层） */
   .viewer .pickable.压黑 .card{ filter: brightness(.42) grayscale(.7); }
-
+  /* 查看器：可选的正常显示，不可选的压黑（见上面 .pickable.压黑）—— 不再描边 ✓ */
   .cardback{ height:var(--卡高-查看); width:auto; aspect-ratio:var(--卡比); border-radius:5px; border:2px solid #1e2a42;
-             background:repeating-linear-gradient(135deg,#2a3a5a,#2a3a5a 6px,#1e2a42 6px,#1e2a42 12px); }
+    background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center; background-color:#2a3a5a; }
   .prewrap{ flex:1; overflow:auto; }
   .prebox{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
            padding:10px 12px; margin-bottom:8px; }
@@ -231,8 +300,15 @@ body.竖屏 #转屏提示{ display:flex; }
          padding:0 5px; margin-bottom:1px; background:linear-gradient(#3a2410,#2a190a);
          border:1px solid var(--line); color:var(--dim); font-size:10px; line-height:1.25; }
   .pile b{ font-size:11px; color:#f3ead8; }
-
+/* 玩家当目标时，体力牌就是可点的那个（和 .card.候选/.选好 同一套视觉） */
+  /* .pile 是「体力牌 / 牌堆」这类**不是卡**的元素（目标玩家就点它）—— 只能靠框线提示 ✓ */
   .pile.候选{ cursor:pointer; outline:2px dashed var(--accent); outline-offset:2px; filter:brightness(1.2); }
+  /* ★ 玩家框：整个框是点击/高亮单位（框线画在框上，不画在里面的体力条上） */
+  .playerbox.候选{ cursor:pointer; outline:2px dashed var(--accent); outline-offset:2px; filter:brightness(1.2); }
+  .playerbox.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
+  /* 玩家框里的两行不再各自压黑：可选时整框正常显示，不可选时由下面那条整框压黑 */
+  .board.选择中 .playerbox .pile{ filter:none; }
+  .board.选择中 .playerbox:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
   .pile.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
   .track{ display:flex; align-items:center; background:linear-gradient(#e6d7b4,#d6c297);
           border:1px solid #4a2c12; border-radius:4px; padding:1px 4px; height:16px; }
@@ -243,6 +319,9 @@ body.竖屏 #转屏提示{ display:flex; }
   .track .cell i.p0{ background:var(--p0); }
   .track .cell i.p1{ background:var(--p1); }
 
+  /* 操作条：固定在当前玩家手牌上方 */
+  /* 操作条：**自己占一整行**（grid-column:1/-1），内容再多也不许溢出盖到下面的区块上。
+     ⚠ 以前写死 height:32px —— 按钮一多就溢出，看着像「盖在非阵地区上」。 */
   .opbar{ grid-column:1/-1; min-height:32px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
           overflow-x:auto; background:linear-gradient(#4a2d14,#331e0c);
           border:1px solid var(--accent); border-radius:6px; padding:3px 8px; }
@@ -250,12 +329,13 @@ body.竖屏 #转屏提示{ display:flex; }
   .opbar::-webkit-scrollbar{ height:5px; }
   .opbar::-webkit-scrollbar-thumb{ background:#5b3c1c; border-radius:3px; }
   .opbar .who{ color:var(--accent); font-weight:700; white-space:nowrap; }
-
+  /* 回合归属：优先权可能是别人的，所以单独一块写清楚「这是谁的回合」 */
   .opbar .turninfo{ color:#ffe9b0; font-weight:700; white-space:nowrap;
                     background:rgba(24,14,6,.85); border:1px solid #a8834a; border-radius:9px; padding:0 6px; }
   .opbar .turninfo b{ color:#fff; }
   .opbar .notyours{ color:#ffb0b0; font-weight:400; }
 
+  /* 侧栏：固定比例的卡图 + 固定文字区，内容不推动布局 */
   .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }
   .detail{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
            padding:6px 8px; height:64%; display:flex; flex-direction:column; gap:4px; overflow:hidden; }
@@ -273,31 +353,34 @@ body.竖屏 #转屏提示{ display:flex; }
 
   .poolcard{ margin:2px; font-size:11px; }
   .deckwrap{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }
-  .deckwrap.单列{ grid-template-columns:1fr; }
+  .deckwrap.单列{ grid-template-columns:1fr; }   /* 联机：只看自己那一列 */
   .deckcol{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line);
             border-radius:6px; padding:7px; max-height:56vh; overflow:auto; }
   .deckrow{ display:flex; justify-content:space-between; align-items:center; gap:6px; }
-
+  
+/* ── 组牌界面（2024 改版）：牌面网格 + 右栏详情 + 筛选 ───────────────── */
 .组牌wrap{ grid-template-columns:var(--左栏宽) 1fr 330px; }
-
+/* ⚠ .detail 的 height:64% 是给**游戏界面**定的（那里它下面还有 .logbox 日志框）。
+   组牌界面的右栏没有日志框 —— 所以这里把它放开，让它**一路占到底**。 */
 .组牌wrap .detail{ height:auto; flex:1; min-height:0; }
-
+/* 卡图框**保持原尺寸**：卡图本来就是被**宽度**限制的（330px 的栏减去内边距），
+   所以把框按卡图比例定死，图的大小和以前一模一样；多出来的高度**全给文字区**。 */
 .组牌wrap .detail .dbox{ flex:none; aspect-ratio:484/682; }
 .组牌wrap .detail .dtext{ flex:1; height:auto; min-height:104px; }
 .deckmain{ display:flex; flex-direction:column; gap:6px; min-height:0; }
-
-.deckwrap{ flex:none; }
+/* 牌组：缩略图网格，一张牌一格（叠张数） */
+.deckwrap{ flex:none; }                       /* 牌组区**固定**，不参与伸缩（不跟着卡池浮动） */
 .deckgrid{ display:flex; flex-wrap:wrap; gap:4px; align-content:flex-start; overflow-y:auto;
-  flex:none; height:30vh; }
+  flex:none; height:30vh; }                    /* 固定高度、自己滚，不把卡池挤走 */
 .thumb{ position:relative; width:62px; aspect-ratio:484/682; border-radius:3px; cursor:pointer;
   background:#1d1207 center/cover; border:1px solid var(--line); flex:none; }
 .thumb img{ width:100%; height:100%; object-fit:cover; border-radius:2px; display:block; }
 .thumb .n{ position:absolute; right:0; bottom:0; background:rgba(18,10,4,.92); color:#ffe9c0;
   font-size:10px; font-weight:800; padding:0 3px; border-radius:2px 0 0 0; }
 .thumb:hover{ border-color:var(--accent); filter:brightness(1.15); }
-
+/* 卡池：牌面网格 */
 .poolgrid.图{ display:flex; flex-wrap:wrap; gap:4px; overflow-y:auto; flex:1; min-height:0;
-  max-height:none; align-content:flex-start; }
+  max-height:none; align-content:flex-start; }   /* 只有卡池伸缩 + 滚动 */
 .poolitem{ position:relative; width:74px; aspect-ratio:484/682; border-radius:3px; cursor:pointer;
   background:#1d1207 center/cover; border:1px solid var(--line); flex:none; }
 .poolitem img{ width:100%; height:100%; object-fit:cover; border-radius:2px; display:block; }
@@ -307,7 +390,7 @@ body.竖屏 #转屏提示{ display:flex; }
 .poolitem .none{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   color:var(--dim); font-size:9px; text-align:center; padding:2px;
   background:repeating-linear-gradient(45deg,#241708,#241708 6px,#1d1207 6px,#1d1207 12px); }
-
+/* 左栏筛选器 */
 .filters{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
   padding:6px; display:flex; flex-direction:column; gap:5px; font-size:11px; flex:none; }
 .filters label{ color:var(--dim); display:block; margin-bottom:2px; }
@@ -321,18 +404,21 @@ body.竖屏 #转屏提示{ display:flex; }
   #错误{ position:fixed; right:12px; bottom:12px; background:#3a1f1f; border:1px solid var(--bad);
          color:#ffd9d9; padding:8px 12px; border-radius:6px; display:none; max-width:380px; z-index:9; }
 
+  /* ── 联机大厅 ───────────────────────────────────────────── */
   .大厅{ max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid var(--line);
          border-radius:8px; padding:22px 26px; color:var(--ink); }
   .大厅 h1{ margin:0 0 4px; font-size:19px; color:var(--accent); }
   .大厅 p{ margin:6px 0 14px; font-size:13px; line-height:1.7; }
-
+  /* 输入框：深底 + **浅字**（和 .次 同一个毛病：--ink 是给浅色面板的正文用的）*/
   .大厅 input{ background:#1d1710; border:1px solid #6b4d28; color:#f0e4cc;
                border-radius:4px; padding:6px 9px; font-size:13px; margin:0 6px 10px 0; }
   .大厅 input::placeholder{ color:#9c8967; }
-
+  /* 大厅面板是浅底（--panel），它自己的按钮沿用金色 —— 和上面的基础样式是一套观感 */
   .大厅 button{ background:var(--accent); color:#2a1c08; border:0; border-radius:4px;
                 padding:7px 16px; font-size:13px; font-weight:700; cursor:pointer; margin-right:8px; }
-
+  /* 次要按钮：深底 + **浅字**。
+     ⚠ 以前写的是 color:var(--ink)（#2b1c0e 深棕）—— 那是给**浅色**面板上的正文用的；
+       压在 #3a2c1a 的深底上就是深字压深底，看着像「禁用的黑按钮」。 */
   .大厅 .次{ background:#4a3520; color:#f0e4cc; border:1px solid #6b4d28; font-weight:400; }
   .大厅 .座{ display:inline-block; padding:4px 12px; border-radius:4px; margin-right:8px;
              border:1px solid var(--line); font-size:13px; }
@@ -351,12 +437,39 @@ body.竖屏 #转屏提示{ display:flex; }
 <div id="app">正在载入…</div>
 <div id="错误"></div>
 <script>
+
+  /**
+   * **打出费用 → 显示文字** ✓（界面侧负责解释，发包不迁就界面 ✗）。
+   *   现在 费用 是 `费用行为[]`（统一后）：取其中 `支付` 那一条的 `点数` ✓
+   *   兼容旧形态：数字 ✓ / 'X' ✓
+   */
+  function 费用文字(v) {
+    if (typeof v === 'number' || typeof v === 'string') return v;      // 数字 / 'X'
+    if (Array.isArray(v)) {
+      const 支 = v.find((b) => b && b.操作 === '支付');
+      if (!支) return '';                                              // 没有数字费用（纯额外费用）
+      return 费用文字(支.点数);
+    }
+    if (v && typeof v === 'object') {
+      if ('乘以' in v) return 'X×' + (v.系数 ?? 1);                     // 周瑜 {X}{X}
+    if ('加' in v) return 费用文字(v.加) + '+' + v.值;                // {X+2} 显示 X+2
+      if ('最小' in v) return v.最小;                                   // 旧区间
+    }
+    return '';
+  }
+  /** 打出费用的**数字**（筛选用；'X' 按 0 ✓ 108.3g） */
+  function 费用数(v) { const t = 费用文字(v); return typeof t === 'number' ? t : 0; }
+
 window.addEventListener('error', (e) => {
   document.getElementById('app').innerHTML = '<pre style="color:#e07070">脚本错误：' + (e && e.message) + '</pre>';
 });
 const 符号 = { 蓝:'🔵', 红:'🔴', 绿:'🟢', 黑:'⚫', 紫:'🟣' };
 const 顺序 = ['左边路','左侧翼','中路','右侧翼','右边路'];
-
+// ── 令牌：**必须在脚本最顶上** ──────────────────────────────
+// ⚠ 这两个原来是 `const`/`let`，写在文件靠后的位置 —— 而 `const` **不提升**，
+//   任何在「脚本初始化跑完」之前调用 带令牌() 的路径都会 ReferenceError（TDZ），
+//   表现是那个操作**静默失败**（请求根本没发出去，界面卡在「引擎处理中…」）。
+//   放最顶上就再也不会有这个坑。
 let 令牌 = (() => {
   const u = new URLSearchParams(location.search).get('令牌');
   if (u) { localStorage.setItem('zmdj令牌', u); return u; }
@@ -364,74 +477,145 @@ let 令牌 = (() => {
 })();
 const 带令牌 = (体) => 令牌 ? { ...体, 令牌 } : 体;
 
+/** 服务器推来的**最新一份对局状态**（`视图()` 的原样）。整个界面都是它的纯函数渲染 */
 let 状态 = null;
-
+/** 详情框里正在看的那张牌。点了卡牌就设它，和「选中（待提交）」是两回事 */
 let 选中 = null;
-
+/** 鼠标下的牌（悬停预览用）。⚠ 是**渲染期**的瞬时状态，不要拿它做判断 */
 let 悬停 = null;
-
+/** 服务器要玩家做的那个决定（`状态.当前请求`）。没请求时是 null */
 let 待选 = null;
-
+/**
+ * ── 统一选择模型 ─────────────────────────────────────────────
+ * 任何时候**只有一个选择任务**：服务器（或客户端）说「要你选 N 个某种东西」，
+ * 客户端把**合法候选**高亮成可点，玩家点它们；操作区只显示进度 + 确认/取消（重来按钮已删 —— 取消就是退出重选）。
+ * 这样就不再区分「这里用按钮、那里点卡牌」了。
+ *
+ * **「选到哪了」只有 `会话` 这一份状态。**
+ *
+ * ⚠ 以前是**六个变量各管一段、各清各的**：
+ *     `已选`（当前任务点到哪）、`已选目标`（宣告的每槽结果）、`已选阵地`（选阵地）、
+ *     `宣告模式`（宣告选哪个模式）、`选择`（一次性挑牌）、`待选.已选目标`（施放的目标）。
+ *   每个都要自己写「什么时候清」，写漏一个就是「幽灵选中」。出过的事：
+ *     · 先手调度的选牌串到后手（高亮显示、还点不掉，因为不在后手手牌里），凑够张数就"确认成功"；
+ *     · 新开一局自动选好了上一局那几张（`nextUid` **每局从 1 重数**，残留 uid 撞上新牌）。
+ *
+ * 现在：**一个会话 = 谁 + 哪一步**。键一变就整个重来 —— 这是唯一一条清空规则。
+ */
 let 会话 = {
-  键: null,
+  键: null,        // 会话标识（任务类型 + 当前步）；变了就把「这一步的已选」整个丢掉
   选: {},
-  槽: {},
-  模式: null,
+  槽: {},          // **已经定下来的**各步结果：槽名 -> uid[]；选阵地存在 '阵地' 键上
+  模式: null,      // 有模式的任务（宣告）选中的模式
 };
+// ⚠ 待支付 已删 ✗ —— 它当年是「客户端发起的挑地支付任务」的挂点 ✓；现在挑地就是【选】的一个槽（支付源），
+//   由服务端的需求给名额 ✓，不需要客户端再挂一个任务 ✗。
+let 任务 = null;                 // 每次 render 算一次，卡牌渲染靠它决定高亮
 
-let 任务 = null;
-
+/** 正在排队的自动提交（同一个 key 只提交一次，防止 render 反复排队） */
 let 自动提交中 = null;
-
+/**
+ * **零选择的决定不该让人点确认** —— 排到下一个微任务里自动提交。
+ * ⚠ 必须在 render() 返回之后才发请求（render 期间改状态会让这一帧画错）。
+ */
 function 自动提交(fn, key) {
-  if (自动提交中 === key) return;
+  if (自动提交中 === key) return;          // 已经排过队了
   自动提交中 = key;
   setTimeout(() => {
-    if (自动提交中 !== key) return;
+    if (自动提交中 !== key) return;         // 期间状态变了（比如玩家自己点了）→ 放弃
     自动提交中 = null;
     fn();
   }, 0);
 }
-
+/**
+ * **统一选择的「量」**：一个候选算多少 —— 候选值表里写了用它，没写就是 1。
+ * 于是「挑几个」（每个 1）和「付多少点」（领土 = 提供）是同一条规则。
+ */
 function 候选量(uid) { const m = 任务 && 任务.候选值; return (m && m.get(uid)) || 1; }
-
+/**
+ * **这一步的暂存槽**（槽名 → Set，按 `任务.步` 分）—— 每步一格，谁也不清谁。
+ */
+/** ⚠ **唯一的「已选」存储是 `宣告选`（数组 ✓）** —— 它就是一个普通数组 ✓。
+ *  以前是**两套**：`会话.选[名]`（Set）与 `宣告选[名]`（数组）✓ —— 同一个概念各存各的 ✗，
+ *  于是「点选写进一套、提交读另一套」→ 点确认没反应 ✗、「高亮读这套、点击读那套」→ 亮了点不动 ✗。
+ *  现在只有一套 ✓：写哪边都是写 `宣告选` ✓，读哪边读到的都是它 ✓。
+ */
+// （(宣告选[) 已删 ✗ —— 旧存储退场 ✓）
+/** ⚠ **唯一的「已选」存储是 `宣告选`（数组 ✓）** —— 它就是一个普通数组 ✓。
+ *  以前是**两套**：`会话.选[名] || []`（Set）✗ 与 `宣告选[名]`（数组）✓ —— 同一个概念各存各的 ✓，
+ *  于是「点选写进一套、提交读另一套」→ **点确认没反应** ✗；
+ *     「高亮读这套、点击读那套」→ **亮了点不动** ✗。
+ *  现在只有一套 ✓：写哪边都是写 `宣告选` ✓，读哪边读到的都是它 ✓。
+ */
+// （(宣告选[) 已删 ✗ —— 旧存储退场 ✓）
+// ⚠ **没有「本槽()/支付槽()」了** ✗ —— 「已选」只有一处：`宣告选[槽名] || []` / 【选】的已选 ✓。
+// ══ 槽表：**「这次要选的东西有哪几槽、各要几个、候选是谁、已经选了什么」**的唯一模型 ══
+//   ⚠ 以前同一套「名额」被三处各写一遍（能加 / 门禁 齐 / 落下），加一张牌要改三处，
+//     漏一处就是「点不动 / 按不下 / 发出去的动缺少字段」。这里收成一处。
+//   已选 = 已确认的（宣告选[名]）+ 这一步手里拿着的（本槽 里属于该槽候选的）—— 两者合并看。
+//   ⚠ 同一个键可以同时属于两个槽（一张地既付款又被牺牲；被牺牲的单位同时是目标）——
+//     每个槽各存各的已选，所以「可重叠」是天然的，不需要特判。
+/** 取某个槽的「数组形式」—— 阵地在 宣告选 里是**单值**（阵地名）✗，直接 .filter 会抛错 ✓ */
 function 建槽表() {
-
+  // ⚠ 有【选】且它自带槽表 → **直接用它** ✓（唯一结构来源 ✓ 不再自己拼一份 ✗）
   if (选择 && 选择.槽表) return 选择.槽表.map((z) => {
-    const 已选 = 已选全().filter((k) => z.候选.has(k));
-
+    const 已选 = 选槽已选(z.名).filter((k) => z.候选.has(k));
+    // ⚠ `已量` = 按**权重**算的总量（领土的「提供」）✓ —— 「要付 2 点」就按点数判 ✓
     return { 名: z.名, 需: z.需 || { 最小: 0, 最大: 1 }, 候选: z.候选, 已选, 已量: 键量和(已选, z.量) };
   });
   const 表 = [];
-
+  // ⚠ 手里拿着的 = 本槽 ∪（**只在支付源这一槽**）支付槽()
+  //   点地时（旧 点选 那条路）地落在 **支付槽()**=(宣告选['支付源') 这个独立缓冲里 —— 不并进来的话，
+  //   模型看到的 支付源 永远是 0 ✗（你看到的「支付 2/2 但按钮还灰」就是这个）。
+  //   ⚠ 但**不能**给每一槽都并 —— 否则 136 里「用来付款的那张地」会顺带把「牺牲槽」也满足了 ✗
+  //     （同一张地允许既付款又被牺牲，但那是**用户各点一次**，不是自动算 ✓）。
   const 加槽 = (名, 需最小, 需最大, 候选) => {
     if (!候选 || !候选.size) return;
-
+    // 「手里拿着的」已取消 ✗
+    // ⚠ **已选一律来自选择系统 B** ✓（已选全() ✓）—— 不再读 宣告选 ✗（那是另一个落点 ✓）
     const 已有 = (选择 ? 已选全() : [] || []).filter((k) => 候选.has(k));
-
+    // ⚠ 「手里拿着的」那一路**已删除** ✗ —— 点选直接写 宣告选[槽名] ✓，所以 已选 就是它 ✓。
     表.push({ 名, 需: { 最小: 需最小, 最大: 需最大 }, 候选, 已选: 已有,
       已量: 已有.reduce((n, k) => n + 候选量(k), 0) });
   };
-
+  // 顺序 = 问的顺序：费用类 → 目标 → 阵地 → 支付
   加槽('额外牺牲', 任务.额外牺牲需 || 0, 任务.额外牺牲需 || 0, 任务.候选额外);
   加槽('费用弃牌', 任务.弃牌需 || 0, 任务.弃牌需 || 0, 任务.候选弃牌);
   加槽('费用牺牲', 任务.牺牲需 || 0, 任务.牺牲需 || 0, 任务.候选牺牲);
   for (const sp of (任务.槽表 || [])) 加槽(sp.目标名, sp.数量?.最小 ?? 0, sp.数量?.最大 ?? 0, new Set(候选键表(sp.候选)));
   if (任务.候选阵地 && 任务.候选阵地.size) 加槽('阵地', 1, 1, 任务.候选阵地);
   if (任务.候选支付 && 任务.候选支付.size) 加槽('支付源', 任务.支付是X ? 0 : (任务.需支付 || 0), 任务.支付是X ? 无数 : (任务.需支付 || 0), 任务.候选支付);
-
+  // ⚠ **兜底：模型不能空着说「都够了」** ✗
+  //   空数组的 every 返回 true → 一个都没选时确认按钮却是亮的 ✗（你报的第一条）。
+  //   而 能收 在空表里返回 null → 点候选（比如目标玩家）毫无反应 ✗（你报的第二条）。
+  //   所以：只要这个任务还有候选而模型里一个槽都没建出来，就按 任务.候选 兜一个「目标」槽 ✓
   if (!表.length && 任务.候选 && 任务.候选.size) {
     const 需最小 = 任务.数量 ? (任务.数量.最小 || 0) : 1;
     const 需最大 = 任务.数量 ? (任务.数量.最大 || 需最小) : 1;
-
+    // ⚠ 已选 = 宣告选['目标'] + 本槽里属于候选的 —— 只读 本槽 的话兜底槽永远填不满 ✗
+    //   （表现：点了等于没点、齐 一直 false、再点还叠一份）
     const 已选0 = 选槽已选('目标').filter((k) => 任务.候选.has(k));
     表.push({ 名: '目标', 需: { 最小: 需最小, 最大: 需最大 }, 候选: new Set(任务.候选), 已选: 已选0 });
   }
   return 表;
 }
-const 无数 = 999;
+const 无数 = 999;   // 支付是X 时不截上限（挑几块地就是在宣告 X）
 function 能收(表, k) { return 表.find((z) => z.候选.has(k) && z.已选.length < z.需.最大) || null; }
-function 槽都够了吗(表) { return 表.every((z) => (z.已量 != null ? z.已量 : z.已选.length) >= z.需.最小); }
+  /**
+   * 槽是否"选对了"：选中量必须落在 最小 + n×步进 之间且 ≤ 最大
+   *   步进缺省 1 = 连续区间（老槽不变）；周瑜 {X}{X} = 步进 2 → 只能选 2、4、6（3 不行）
+   */
+  function 槽都够了吗(表) {
+    return 表.every((z) => {
+      const 量 = z.已量 != null ? z.已量 : z.已选.length;
+      const 需 = z.需 || {};
+      const 最小 = 需.最小 ?? 0;
+      const 步 = 需.步进 && 需.步进 > 1 ? 需.步进 : 1;
+      if (量 < 最小) return false;
+      if (需.最大 != null && 量 > 需.最大) return false;
+      return (量 - 最小) % 步 === 0;
+    });
+  }
 
 function 计数(已挑, 集) { let n = 0; for (const k of 已挑) if (集 && 集.has(k)) n += 候选量(k); return n; }
 function 非支付候选() {
@@ -441,63 +625,115 @@ function 非支付候选() {
   return out;
 }
 
+
+
 function 能加(uid) {
   if (!任务) return false;
-
+  // 名额只有这一处：能收 就是「有某个槽的候选里有它、且那个槽还没满」
+  //   （支付是X 时支付槽的上限是「无数」，所以照旧不截）
   return !!能收(建槽表(), uid);
 }
 
+  /** 现在该谁操作：热座看当前请求，联机看是不是我自己。**所有交互按钮的开关都问它** */
 function 能操作(s, p) { return s.我的座位 == null || s.我的座位 === p; }
 
+/**
+ * 一个目标规格的候选**键表**：实体用 uid，玩家用 **'玩家'+座位号**。
+ *   ⚠ 玩家没有 uid（候选形状是 { 类型:'玩家', 玩家:N, 名称 }），以前这里
+ *     `.filter(c => c.类型 === '实体').map(c => c.uid)` 把玩家**整个丢掉了** ——
+ *     于是「以目标玩家为目标的牌」根本点不出玩家来（组装那边其实早就写了玩家分支）。
+ */
 const 玩家键 = (n) => '玩家' + n;
-
+/** 候选集 → 给 CSS 高亮用的一串 key（`data-键`）。同一批候选在牌面和操作区都要亮 */
 function 候选键表(候选) {
   return (候选 || [])
     .filter((c) => c.类型 === '实体' || c.类型 === '玩家')
     .map((c) => (c.类型 === '玩家' ? 玩家键(c.玩家) : c.uid));
 }
 
+/** 「已挑」= 【选】自己的已选 ✓ */
+/** ⚠ **「候选 / 选好」两个类只由这里算** ✓ —— 以前 6 处各写一遍 ✗，而且各错各的 ✓：
+ *   · 有的把「已选」算成 `本槽()`（=会话.选）✗ —— 而槽表那条路写的是 `宣告选` ✓ → 实线不出现 ✓；
+ *   · 有的把「已选」与「候选」绑在一起 ✗ —— 而**服务器在点完之后会把已选的那个从候选里去掉** ✓，
+ *     于是两个类同时消失 ✓ → 「点了框就没了、也点不动」✗（玩家框/阵地/卡牌都报过 ✓）。
+ *  规则（三条 ✓）：
+ *   · 画不画框 = **在候选集里 ∪ 已经选中** ✓（已经选中的就算不在候选里也要画 ✓，否则取消不了 ✓）
+ *   · 实线 = **已经选中** ✓（只看 已挑() ✓，与候选无关 ✓）
+ */
 function 框类(键, 在候选) {
   const 已 = 已挑(键);
   return ((已 || 在候选) ? ' 候选' : '') + (已 ? ' 选好' : '');
 }
 
+/** 把各槽的已选拼平 ✓（**现算** ✓ 不是第二份状态 ✗）—— 按槽表顺序 ✓ */
 function 已选全() {
   if (!选择) return [];
   const 出 = [];
   for (const z of (选择.槽表 || [])) for (const k of (选择.槽已选[z.名] || [])) 出.push(k);
   return 出;
 }
-
+/** ⚠ 「已挑」= 任意槽里有它 ✓（按槽存 ✓ 所以同一个键可以在多个槽 ✓） */
 function 已挑(uid) { return !!(选择 && (选择.槽表 || []).some((z) => (选择.槽已选[z.名] || []).includes(uid))); }
-
+/** **已挑的领土**能提供多少点。和引擎的 可支付来源 用同一份数据，不自己算。 */
 function 已付额(源) {
   const 表 = (状态 && 状态.可支付来源 && 状态.可支付来源[待选玩家()]) || [];
   return (源 || []).reduce((n, uid) => n + ((表.find((x) => x.uid === uid) || {}).提供 || 0), 0);
 }
-
+/**
+ * 现在要玩家选什么？（服务器驱动；客户端只维护「已选」）
+ *
+ * ⚠ 施放的「选阵地/选目标」和「挑地付钱」**是同一个面板里的两个槽** ——
+ *   它们由同一次施放产生（601.1d 选阵地、601.2c 付费用），互不依赖，
+ *   拆成两次确认纯属界面自己造的。所以每个施放步骤都带着 需支付/候选支付，
+ *   确认要两边都齐才亮。
+ */
 function 当前任务(s) {
   const req = s.当前请求;
   const d = req && req.决定;
-
+  // ⚠ **弃牌的分支已删** ✗ —— 它以前自己造候选（手牌 uid）与提交（`弃牌:[…]`）✓，
+  //   现在这两样都由**服务端的需求**给（收发层的 需求_决定 从 `g` 里取手牌 ✓）→ 走 `需求面板()` ✓。
+  // 「轮不到自己」在 `操作条内容()` 开头就判过了 ✓，这里不必再判一次 ✗。
+  // ⚠ **「选 · 阵地」的分支已删** ✗ —— 它的候选 / 名额 / 提交全由服务端的需求给 ✓
+  //   （收发层把 `候选:[{键:'左边路'}]` 打包成一个「选择」槽 ✓）：界面走 `需求面板()`，
+  //   阵地格的高亮与点选由 `选态()` 按 `选择.槽表` 的候选判 ✓。
+  // ⚠ **「选 · 物件 / 多槽」的分支已删** ✗ —— 候选、每槽名额、条件、以及发什么，全在需求里 ✓
+  //   （走 需求面板()；选·阵地 也是同一条路 ✓）。
+  // ③ 唯一要留的薄分支：**「触发中」那些条目要在堆叠区列出来**（603.3b 排进堆叠的顺序）——
+  //    它需要候选的**名字与顺序**，所以把服务端的 d.候选 原样挂上给堆叠区用 ✓；
+  //    确认发什么仍然走 填模板()（需求里那个槽的 归 就是 选 ✓，顺序 = 点选顺序 ✓）。
   if (d && d.类型 === '选' && d.选什么 === '触发' && 能操作(s, req.玩家)) {
     return { 类型: '选', 步: '触发|' + req.玩家 + '|' + (d.标签 || ''), 说明: d.标签,
              数量: d.数量 || { 最小: 0, 最大: 0 }, 可放弃: false, 可取消: false,
              需求: s.决定需求 || null,
              候选表: d.候选, 选什么: '触发',
-
+             // ⚠ 空的 ✓：发什么由 填模板() 从需求算 ✓
              提交: () => {} };
   }
-
+  // ③ 触发式能力的「宣告」—— **也走统一选择模型**（点场上的牌），不再用下拉框。
+  //    服务端已经给了 规格（带 候选），格式和 施放 的 目标规格 一模一样。
   if (d && d.类型 === '宣告' && 能操作(s, req.玩家)) {
-
+    /**
+     * ⚠ **带模式的宣告也交给需求面板** ✗→✓（两段式重构 ✓）：
+     *   第一段就是"**选模式**"这**一个普通槽** ✓（服务端发的候选带名字 ✓、并标了 `呈现:'按钮'` ✓）；
+     *   目标推迟到**结算时** ✓ —— 那时引擎另发一份 `宣告`（带 `规格`、**没有** `模式候选` ✓，
+     *   见 `engine.ts:4263` ✓）→ 自然走下面那条老路 ✓。
+     *   ⚠ 旧注释担心的是"多个模式的槽并在一起会重名" ✗ —— 两段式之后**两个模式不会同时**
+     *     出现在一份需求里 ✓，这个担心不成立了 ✓；而继续走 `组装宣告` 的代价是
+     *     **第一段根本没被问过** ✗ → 一个包都发不出去 ✓（2026-10 的"确认按不动" ✓）。
+     */
     if (d.模式候选) return null;
-
+    // ⚠ **无模式的宣告 → 交给需求面板 / 模板** ✓（规格就是 `d.规格` ✓，没有歧义 ✓）。
     if (!d.模式候选) {
       const 规格0 = d.规格 || [];
-
+      /**
+       * ⚠ **带模式的宣告必须交给需求面板**（两段式第一段 ✓）：
+       *   模式阶段的 `d.规格` 是**空的** ✓（目标要到结算时才知道 ✓）——
+       *   以前它落到下面那条"没有目标 → 自动提交"✗ → **模式根本没被问** ✓，
+       *   自动提交又填不出 `$模式` ✗ → 一个包都发不出去 ✓（2026-10 的"确认按不动"✓）。
+       *   交回通用需求面板 ✓：模式槽（`呈现:'按钮'` ✓，候选带名字 ✓）由它画 ✓、选完点确认 ✓。
+       */
       if (d.模式候选 && d.模式候选.length) return null;
-
+      // 无目标 → 不用人点，直接照模板宣告 ✓（老行为：自动提交 ✓）
       if (!规格0.length) {
         const key = '宣告|' + (req.步骤 || '') + '|' + (d.标签 || '');
         自动提交(() => { const 发 = 填模板(s.决定需求, null); if (发) 动作(发); }, key);
@@ -506,7 +742,7 @@ function 当前任务(s) {
       return { 类型: '选', 步: '宣告|' + (req.步骤 || '') + '|' + (d.标签 || ''), 说明: d.标签,
                数量: { 最小: 0, 最大: 0 }, 可放弃: false, 可取消: false,
                需求: s.决定需求 || null,
-
+               // ⚠ 空的 ✓：发什么由 `填模板()` 从需求算 ✓
                提交: () => {} };
     }
     const 规格 = d.模式候选
@@ -515,54 +751,97 @@ function 当前任务(s) {
     for (const sp of 规格) {
       const 已 = 宣告选[sp.目标名] || [];
       if (已.length < sp.数量.最大) {
-
+        // 步 = 目标槽名 —— 换槽就换会话键，「这一步的已选」自动清空，已定下的槽留着
         return { 类型: '选', 步: '目标:' + sp.目标名,
                  说明: '点场上的牌或玩家（要选 ' + sp.数量.最大 + ' 个）'
-
+                       // ⚠ 只有在**进堆叠时**问的（带 模式候选 的那种）才谈得上「后面还会问一次用不用」——
+                       //   结算时问的目标排在那一问**之后**，那时早就答过了，说这句是错的。
                        + (d.可选 && d.模式候选 ? '　—— 这只是进堆叠时要选的目标；**结算时还会再问一次用不用**，现在选了不等于一定要发动（603.5）' : ''),
                  数量: sp.数量, 可放弃: false, 可取消: false,
-                 候选: new Set(候选键表(sp.候选)),
+                 候选: new Set(候选键表(sp.候选)),   // 实体给 uid，玩家给 '玩家N'
                  提交: (选) => { 宣告选[sp.目标名] = [...选]; render(); } };
       }
     }
-
+    // ⚠ **没有可选的就没有这一步** ——
+    //   以前这里无条件返回一个「需: 0」的任务，逼玩家点一次「确认」。
+    //   对于没有目标的触发式能力（规格为空），那就是纯废操作：
+    //   操作条显示「目标已选好，点确认（已选 0/0）」，点了才真的宣告。
+    //   规格为空、或目标已经选齐 —— 都不需要人再点一下，直接提交。
+    // ⚠ **有多个模式可挑时必须留一个任务** —— 模式按钮只在「有任务」时渲染，
+    //   而下面那条自动提交会在玩家点之前就把宣告送出去。
+    //   黑水祭天（准备步骤的模式触发）就是这样「没有选择、自动运行」的：
+    //   第一帧 对齐会话 默认选了模式 0，那个模式没有目标规格 → 条件恒真 → 立刻提交。
+    // ⚠ 条件是 `> 0` 不是 `> 1` —— 只有一个模式时同样是「玩家的选择」，
+    //   而且这种能力往往没有目标规格，落到下面的自动提交就会**直接结算**（黑水祭天）。
+    /**
+     * ⚠ **带模式的宣告不再特判** ✗→✓（两段式重构 ✓）：模式是需求里的**一个普通槽** ✓
+     *   （候选带名字 ✓，且服务端已按 603.3c 剔掉"没有合法目标"的模式 ✓）→ 交给**通用需求面板** ✓。
+     *   ⚠ 以前这里造了个特判任务（`会话.模式` + `组装宣告` + 自己画一排按钮 ✗）：那套只在
+     *     老的单段式下凑合 ✓，而单段式要求"选模式的同时交出目标" ✗ —— 根本做不到 ✓
+     *     （2026-10 的"确认按不动" ✓）。选完模式之后 ✓，引擎在**结算时**再发该模式的目标槽需求 ✓
+     *     （`engine.ts:4263` 那份 `规格` ✓）→ 那时也是同一个面板 ✓。
+     */
     return null;
-
+    // ⚠ 这条只在**没有模式可挑、也没有东西可选**时才该触发（无目标的触发式能力）。
+    //   `数量.最小` 对「至多」类规格是 0，所以这个条件对它们恒真 —— 不能拿它当「选齐了」。
     if (规格.length === 0 || 规格.every((sp) => (宣告选[sp.目标名] || [] || []).length >= sp.数量.最小)) {
-
+      // key 从「当前请求」派生 —— 请求一换 key 就变，之前排的那个队列会自己放弃
       const key = '宣告|' + (req.步骤 || '') + '|' + (d.标签 || '');
       自动提交(() => { 动作(组装宣告(d, 规格)); 宣告选 = {}; }, key);
       return null;
     }
     return null;
   }
-
+  // ④ **客户端驱动的动作**（施放 / 启动能力 / 转移 / 发起战斗）—— 界面**全部由服务端的需求给** ✓
+  //    这里只做三件**呈现层**的事：标题、进度用的数量、把需求挂上去 ✓。
+  //    ⚠ 提交**不走这里** ✗ —— 有需求的任务一律由 `填模板()` 发（见 提交()）✓；
+  //      槽名 / 名额 / 候选 / 条件 / 点完发什么，全在 `待选.动作.需求` 里 ✓。
   if (待选 && 待选.动作) {
     const a = 待选.动作;
-
+    // 谁在做这次动作（热座 = 当前该动的那个；联机 = 我自己）
     if (待选.玩家 == null) 待选.玩家 = (s.我的座位 == null ? (s.当前请求 ? s.当前请求.玩家 : 0) : s.我的座位);
     const 槽s = (a.需求 && a.需求.槽) || [];
     return { 类型: '选', 步: (a.种类 || '') + '|' + (a.uid ?? ''), 是槽表: true,
              说明: a.标签 || '',
              数量: { 最小: 槽s.reduce((n, z) => n + z.需.最小, 0), 最大: 槽s.reduce((n, z) => n + z.需.最大, 0) },
              需求: a.需求 || null,
-
+             // ⚠ **可以取消** ✓ —— 挑到一半不想打了，得能退回优先权（以前老面板有「取消」✓）
              可取消: true,
-
+             // ⚠ **空的** ✓：有需求的任务由 `填模板()` 发 —— `任务.提交` 那条路对新动作已经不用了 ✗
              提交: () => {} };
   }
-
+  // ⚠ **施放待选 / 待支付 两个大分支已删** ✗ —— 它们以前自己算：还差多少钱、候选支付、候选值、
+  //   启动费用三个池、目标槽、并集、说辞，以及确认时的 分配目标/落费用/落支付源/推进施放 ✓。
+  //   现在这些**全部由服务端的需求给**（收发层的 需求_动作 ✓）：界面走上面那个薄分支 + 需求面板()，
+  //   提交走 填模板() ✓ —— 客户端不再认识 支付源/额外牺牲/费用弃牌/费用牺牲/X 这些字段 ✓。
   return null;
 }
-
+/**
+ * 点一个候选：**已选就取消、没选就选上**，再把进度写回 `本槽()`。
+ * ⚠ 只认 `任务.候选` 里的 uid —— 不在候选里的点了不响应（这就是「幽灵选中」的防线）。
+ */
 let 组牌 = null;
-
+/** 组牌界面的筛选条件（客户端本地，不发给服务端） */
 let 组牌筛选 = { 词: '', 势力: '', 类别: '', 费用: '', 基本: '' };
-
+/** 组牌界面鼠标悬停/点选的牌 id（用来在右栏显示详情） */
 let 组牌选 = null;
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 
+/* ── 内联处理器：**唯一入口**，转义只写这一处 ──────────────────────────
+ *
+ * ⚠ 为什么要它：`onclick="点选(<参数>)"` 是**HTML 属性** —— 属性值到下一个 `"` 就结束 ✗。
+ *   参数里只要出现裸的双引号（`JSON.stringify('留在牌库顶')` 就会 ✗），属性当场被截断，
+ *   处理器源码只剩半句 `点选(` → 浏览器**点击时**才编译 → `Uncaught SyntaxError: Unexpected end of input`
+ *   （2026-02 报的那个 ✓：后手检视牌库顶，两个按钮都炸 ✗）。
+ *
+ * 规矩（只在这一处）：
+ *   · 字符串 → 单引号包裹，并转义 `\` `'`；`"` `<` `>` `&` 走 HTML 实体 ✓
+ *     （实体是**属性边界判完之后**才解码的 ✓ 所以不会再截断 ✓）
+ *   · 数字 / 布尔 → 直出 ✓
+ *   · 别的（对象 / undefined / NaN）→ **当场抛** ✗（宁可开发时炸，也不生成点不动的按钮 ✓）
+ * ⚠ 一律写成 `' onclick="' + 内联('函数名', 参数…) + '"'` ✓ —— 别再手拼引号 ✗。
+ */
 function 参(值) {
   if (typeof 值 === 'number') {
     if (!Number.isFinite(值)) throw new Error('内联处理器的数字参数必须是有限数：' + 值);
@@ -578,38 +857,61 @@ function 参(值) {
     .replace(/\r?\n/g, '\\n');
   return "'" + s + "'";
 }
-
+/** 生成一个内联处理器（`函数名(参数…)`）✓ —— 见 参() 的说明 ✓ */
 function 内联(名, ...参数s) { return 名 + '(' + 参数s.map(参).join(',') + ')'; }
 const 需文 = (c) => Object.entries(c.势力需求 || {}).map(([k, v]) => 符号[k].repeat(v)).join('');
 const 供文 = (c) => Object.entries(c.支持 || {}).map(([k, v]) => 符号[k].repeat(v)).join('');
 const 类文 = (c) => ((c.超类别 && c.超类别.length ? c.超类别.join('') : '') + c.类别.join('/'))
   + (c.副类别 && c.副类别.length ? '～' + c.副类别.join('/') : '');
 
+/**
+ * **渲染一张牌**（战场/手牌/墓地/牌库都用它）。`大` = 用查看器那档尺寸，`只悬停` = 不绑定点击。
+ * ⚠ 暗置的牌服务端**不发牌面**（图 = null），这里按 `面 === '暗置'` 补卡背。
+ */
+/** ══════════════════════════════════════════════════════════════════════
+ * **【选】—— 唯一的选择操作**（重写第 ① 步：内核先落地，暂不接线 ✓）
+ *
+ * 契约（按用户定的模型 ✓）：
+ *   · 候选来源**任意**：战场 / 查看器打开的区域（墓地·牌库…）/ 堆叠 / 将要进堆叠的 /
+ *     **额外面板里的牌** ✓ —— 额外面板**不是区域** ✗，它是个空容器：**谁调用它、就往里放什么** ✓
+ *     （目前只被检视用：检视时把要看的牌放进去 ✓ → 它就是一个**可选的来源** ✓）。
+ *   · 【选】只做三件事：**呈现候选 → 收要点 → 把选中的键交给调用方** ✓
+ *     它自己**不认识**「搜寻」「征召」「施放」✗ —— 那是调用方（用途）的事 ✓ → 统一分发 ✓。
+ *   · 于是【搜寻】= 先把区域交给检视（把牌放进面板 ✓）→ 用【选】点其中的牌 ✓
+ *     → 「选来干什么」由调用方决定 ✓（701.17a ✓）。
+ *
+ * 用法：开始选({ 名字, 源, 候选, 数量, 已选, 用途, 面板 }) ✓
+ *   用途(选中键数组) —— 选好时调用 ✓；用户「未选/取消」时用 用途(null) ✓。
+ * ══════════════════════════════════════════════════════════════════════ */
 const 选源 = { 战场: '战场', 区域: '区域', 堆叠: '堆叠', 待进堆叠: '待进堆叠', 额外: '额外' };
 let 选择 = null;
-
+// 「宣告」那条路的**自有**小存储 ✓（不与【选】共用 ✗）
 let 宣告选 = {};
-
+/** 槽的候选 → 键 ✓（服务端现在发 `[{键, 发}]`；裸键的老形状也照样认 ✓） */
 const 槽键 = (z) => (((z && z.候选) || []).map((c) => (c && typeof c === 'object' && '键' in c) ? c.键 : c));
-
+/** 槽的候选 → **权重表**（`候选.量`，缺省 1）✓ —— 领土的「提供」在这里，于是「付 2 点」是按点数卡的 ✓ */
 const 槽量表 = (z) => ((z && z.候选) || []).reduce((m, c) => {
   if (c && typeof c === 'object' && c.量 != null) m[c.键] = c.量;
   return m;
 }, {});
-
+/** 一组键在这张权重表上的**总量** ✓（缺省每个算 1 ✓） */
 const 键量和 = (键s, 量表) => (键s || []).reduce((n, k) => n + ((量表 && 量表[k]) || 1), 0);
-
+/** 开始一次选择 ✓（唯一入口） */
 function 开始选({ 名字, 源, 候选, 数量, 可放弃, 已选, 用途, 槽表 }) {
   选择 = {
     名字: 名字 || '',
     源: 源 || 选源.战场,
     候选: 候选 instanceof Set ? 候选 : new Set(候选 || []),
     数量: 数量 || { 最小: 1, 最大: 1 },
-
+    // ⚠ **多槽结构进内核** ✓（名/名额/候选 ✓）—— 调用方（C 任务层）一次给全 ✓，
+    //   于是「哪个键属于哪一槽」只有一处判据 ✓（以前是客户端的 建槽表 ✗）。
     槽表: 槽表 || null,
-
+    // ⚠ 「不选 / 未搜寻到」是**搜寻 701.17b** 的选项 ✓ —— 由调用方显式给 ✓，
+    //   **不能**拿「数量最小 === 0」去猜 ✗（纯检视的最小也是 0 ✓，但它**没有**这个按钮 ✗）。
     可放弃: 可放弃 === true,
-
+    // ⚠ **已选按槽存** ✓：`槽已选 = { 槽名: [键…] }` —— 同一个键**可以同时在两个槽** ✓
+    //   （【黄巾之乱】的启动费用：牺牲一个领土 ✓ 且那块地同时用于支付 ✓ → 点两次 ✓ 一次确认 ✓）。
+    //   扁平那份不再另存 ✗ —— 需要时用 `已选全()` / `已挑(键)` 现算 ✓（仍然只有一处状态 ✓）。
     槽已选: (() => {
       const 初 = {};
       if (!槽表) return 初;
@@ -617,46 +919,62 @@ function 开始选({ 名字, 源, 候选, 数量, 可放弃, 已选, 用途, 槽
       return 初;
     })(),
     用途: 用途,
-
+    // ⚠ `面板` 字段已删 ✗ —— 「检视/搜寻」那套「把牌塞进【选】」的做法取消了 ✓：
+    //   检视 = 一块**区域视图**（`区域视图html()` 画服务端登记的 `可见登记` ✓），
+    //   确认由操作条的 `需求面板()` 给 ✓ —— 于是【选】只持有「键」，不再持有来源 ✗。
   };
   return 选择;
 }
-
+/** 点一个键：**唯一的点击处理** ✓（在候选里才响；选中→取消、没选→选上（名额内）✓） */
 function 点选(uid) {
-
+  // ⚠ **唯一选择入口** ✓（战场/查看器/额外面板都到这里 ✓）
   if (选择 && 选点(uid)) render();
 }
-
+/** 点堆叠上的「能力」（114.9）—— 键是负数（-StackItem.id） */
 function 点能力(键) {
-
+  // 同上：走统一入口 ✓（键 = -StackItem.id ✓，本来就在 任务.候选 里 ✓）
   点选(键);
 }
 
+/** 点一个阵地：只对当前任务的候选阵地生效 */
 function 点阵地(slot) {
-
+  // ⚠ **统一入口** ✓：以后「点阵地」就只是把键交给 点选 ✓
+  //   （以前它自成一套 ✗ —— 逻辑要在两处各写一遍 ✓，我改这边、那边不生效 ✓）。
   点选(slot);
 }
-
+/** 现在该谁操作（热座：看当前请求；联机：我自己） */
 function 待选玩家() { return 状态.我的座位 == null ? (状态.当前请求 ? 状态.当前请求.玩家 : 0) : 状态.我的座位; }
-
-function 取消任务() {
+/** 放弃整个任务（走任务的「取消」分支，能不能放弃由任务自己判） */
+/** 需求面板的「取消」✓：真发一个"不接受"给服务端（引擎那边的链子看到它就停 ✓） */
+function 取消决定() {
+  动作({ 种类: '决定', 接受: false });
+  待选 = null; 宣告选 = {}; 选择 = null;
+  render();
+}function 取消任务() {
   待选 = null; 宣告选 = {};
-  选择 = null;
+  选择 = null;   // ⚠ **也要清选择系统** ✓ —— 否则取消后阵地还亮着、手牌点不动 ✗（2026-02 报的 ✓）
   render();
 }
-
+/**
+ * **照服务端的模板组装一条动作** ✓ —— 客户端只做两件事：
+ *   ① `'$归名'` → 该组已选（**数组**，元素取 `候选.发` ✓；`发` 省略就是键本身 ✓）
+ *   ② `'@字段'` → 当前动作自己的字段（值直接搬过去 ✓）
+ *   其余是字面量 ✓。
+ * ⚠ **客户端不认识任何字段名，也不做任何数值计算** ✗（`X` 由引擎按支付源推导 ✓，模板里根本没有它 ✓）。
+ * 返回 null = 这条没有模板（那就别发 ✗）。
+ */
 function 填模板(需求, 动作体) {
   if (!需求 || !需求.确认后发) return null;
   const 发 = JSON.parse(JSON.stringify(需求.确认后发));
   const 槽s = 需求.槽 || [];
-  const 归名 = (z) => (z && typeof z.归 === 'string' && z.归) ? z.归 : z.名;
+  const 归名 = (z) => (z && typeof z.归 === 'string' && z.归) ? z.归 : z.名;   // 兼容老模板（占位 = 槽名）
   const 取组 = (名) => {
     const 出 = [];
     for (const z of 槽s) {
       if (归名(z) !== 名) continue;
       for (const k of (选择 ? (选择.槽已选[z.名] || []) : [])) {
         const c = (z.候选 || []).find((x) => x && typeof x === 'object' && x.键 === k);
-        const 值 = (c && typeof c === 'object' && '发' in c) ? c.发 : k;
+        const 值 = (c && typeof c === 'object' && '发' in c) ? c.发 : k;      // 省略 发 = 键本身 ✓
         if (值 !== undefined) 出.push(值);
       }
     }
@@ -667,7 +985,7 @@ function 填模板(需求, 动作体) {
     if (typeof v !== 'string') continue;
     if (v[0] === '$') {
       const 已 = 取组(v.slice(1));
-
+      // ⚠ 一个都没选 → **不要写这个字段** ✗（写了 undefined 会被 JSON 丢掉 ✓ 但别留隐患 ✓）
       if (已.length) 发[字段] = 已; else delete 发[字段];
     } else if (v[0] === '@') {
       const 值 = 动作体 ? 动作体[v.slice(1)] : undefined;
@@ -677,43 +995,74 @@ function 填模板(需求, 动作体) {
   return 发;
 }
 
+/** 提交当前选择任务。`放弃` = 走「取消/不选」那条分支（任务自己决定放不放弃得了） */
 function 提交(放弃) {
-
+  // ⚠ **任务可以是 null** ✓ —— 决定类的界面是 `需求面板()`（它直接读 `状态.决定需求` ✓），
+  //   这时「发什么」还是由**同一份需求**算 ✓。以前这里第一行就是 `if (!任务) return` ✗，
+  //   把决定类的确认按钮变成**点了没反应** ✗（客户端冒烟抓到的 ✓）。
+  // ⚠ 需求的来源**按「有没有任务」二选一** ✓：
+  //   · 有任务 → 用 `任务.需求` ✓（没需求就说明这一步不走模板 → 落到 `任务.提交` ✓，
+  //     比如**有模式候选的宣告**：它走 组装宣告 ✓。这里要是回落到 `状态.决定需求` ✗，
+  //     就会去填一份**模式槽还没被选过**的模板 → 模式被静默丢掉 ✗ —— 真跑冒烟抓到的 ✓）
+  //   · 没任务 → 决定类的界面是 `需求面板()`，需求在 `状态.决定需求` ✓
   const 需求源 = 任务 ? (任务.需求 || null) : ((状态 && 状态.决定需求) || null);
-
+  // ⚠ **按服务端的模板发** ✓（`$归名` 收集 + `@字段` 搬值）—— 见 填模板() 的说明 ✓
   const 发 = 填模板(需求源, (待选 && 待选.动作) || null);
   if (发) { 动作(发); render(); return; }
-
+  // 没有模板、也没有任务 → 没什么可发的 ✓
   if (!任务) return;
-
+  // 没有模板的任务（老路）走任务自己的提交 ✓
   const 结果 = 选择 ? (选择.槽表
     ? 选择.槽表.flatMap((z) => 已选全().filter((k) => z.候选.has(k)))
     : [...已选全()]) : [];
   任务.提交(结果, 放弃);
   render();
 }
-
+/**
+ * **对齐会话** —— 每次 render 调一次，返回当前任务。
+ *
+ * 唯一那条清空规则：**键变了就把「这一步的已选」整个丢掉**。
+ * 键 = 任务类型 + 当前步（哪个人 / 哪个目标槽 / 哪个模式）。
+ * 「已经定下来的槽」（宣告选）不跟着清 —— 那是前几步的结果。
+ */
+/** 给**不走 `当前任务()` 的决定**兜底算会话键（决定类的界面是 `需求面板()`，不进任务模型 ✓）。
+ *
+ * ⚠ **每一类决定都要有键** ✓ —— 只覆盖「调度执行 / 弃牌 / 搜寻」三类的话，其它决定两次相邻
+ *   （选·物件 甲 → 选·物件 乙）键都是 `null` ✗ → 永远不换键 → 「这一步的已选」不会清 ✓
+ *   → 而需求桥又只看「有没有【选】」✗ → 第二问会沿用第一问的槽 ✓（真跑冒烟能抓到 ✓）。
+ */
 function 决定键(s) {
   const req = s.当前请求, d = req && req.决定;
   if (!req || !d || !能操作(s, req.玩家)) return null;
   const 量 = d.数量 ? (d.数量.最小 + '-' + d.数量.最大) : (d.需弃 ?? d.张数 ?? '');
   return [d.类型, d.选什么 || '', req.玩家, d.标签 || '', 量].join('|');
 }
-
+/** 让 `会话` 和当前请求对齐 —— **键一变就把「这一步的已选」丢掉**，这是唯一一条清空规则 ✓ */
 function 对齐会话(s) {
-
+  // ⚠ 「宣告」的规格随模式变 —— 得**先**把模式定下来，任务才算得出来
   const d0 = s.当前请求 && s.当前请求.决定;
   if (d0 && d0.类型 === '宣告' && d0.模式候选 && !d0.模式候选.some((m) => m.索引 === 会话.模式)) {
     会话.模式 = d0.模式候选[0].索引;
   }
   const t = 当前任务(s);
   const 键 = t ? t.类型 + '|' + (t.步 || '') : 决定键(s);
-
+  // ⚠ 清的是**【选】里「这一步的已选」** ✓，**不是 `宣告选`** ✗ ——
+  //   `宣告选` 是「前几步已经定下来的槽」（多目标宣告要跨步留着 ✓）；
+  //   以前这里写的是 `宣告选 = {}` ✗，跟它自己的注释（「已定下的槽不跟着清」）**正好相反** ✓
+  //   → 多目标宣告**永远填不满**（选一个槽、一渲染就被清掉 ✓）。真跑冒烟抓到的 ✓。
   if (键 !== 会话.键) { 会话.键 = 键; 选择 = null; }
-
+  // 换了请求 / 候选变了：把已选里不再合法的剔掉。
+  // ⚠ 选阵地那一步的 `候选` 是**空集**（真正的候选在 候选阵地 里），不能拿它剔 ——
+  //   否则刚点中的阵地会在下一次 render 当场被删掉。
+  // ⚠ 这里曾经**剔掉「不在任务候选里的已选」** ✗ —— 那是**单槽**的度（`t.候选` / `t.数量.最大`）
+  //   被当成**整场多槽**的上限用 ✗：选 1 个目标 + 1 块领土 = 2 > 目标还差 1 → 每帧删掉一个 ✓
+  //   → 「施放召回时领土和目标只能留一个」✓（2026-02 报的 ✓）。
+  //   现在**不需要它** ✓：已选**按槽存** ✓（`选择.槽已选`），名额由 `选点 → 选槽` 逐槽判 ✓，
+  //   合法性由 `开始选` 按槽表初始化 ✓ —— 这块留着只会误删 ✓，删掉 ✗。
   return t;
 }
-
+/** 整个会话作废（新局 / 取消 / 提交完了） */
+// （宣告选 = {} 已删 ✗ —— 旧存储退场 ✓）
 let 选择的键 = null;
 function 对齐选择状态() {
   const s = 状态;
@@ -729,63 +1078,95 @@ function 对齐选择状态() {
   选择的键 = 键;
   清掉选择();
 }
-
-function 切换选择(uid, 上限) { if (选择 && 选点(uid)) render(); void 上限; }
-
+/** 点一张牌：已选就取消，没选就选上（可选上限） */
+/** ⚠ 走【选】✓ */
+function 切换选择(uid, 上限) { if (选择 && 选点(uid)) render(); void 上限; }/** 搜寻/检视的选择界面收尾：把选中的牌（或「未搜寻到」）交回去 */
+// （提交搜寻() 已删 ✗）
+/**
+ * **「清掉选择」只有这一份定义。**
+ * ⚠ 三个触发时机，但清的东西必须是同一套 —— 分散写就是「少清一个」的来源：
+ *   ① 请求变了（每帧的 对齐选择状态）；
+ *   ② 开始一个新动作（点动作）；
+ *   ③ 一次动作做完了（动作()）。
+ */
 function 清掉选择() {
-  选中 = null; 悬停 = null; 待选 = null;
+  选中 = null; 悬停 = null; 待选 = null; 
   宣告选 = {};
-
+  // ⚠ **【选】本身也要清** ✗ —— 它现在是唯一的存放点 ✓；不清的话换步/换请求后
+  //   还留着上一次的槽表与已选 → 「地盘/支付」数字错乱 ✓，而且桥的 `!选择` 守卫
+  //   不会再重建 ✓ → 确认时用的是旧槽表 → `$支付源` 取到 undefined →
+  //   发出去的请求里没有 支付源 → 服务端「要付 1 点数字费用，请先挑要启动的领土」✓
   选择 = null;
 }
-
+/** 点一个键：**唯一的点击处理** ✓（在候选里才响；选中→取消、没选→选上（名额内）✓） */
 function 选点(键) {
   if (!选择 || !选择.候选.has(键)) return false;
-
-  const 在 = (选择.槽表 || []).find((z) => (选择.槽已选[z.名] || []).includes(键));
-  if (在) { 选择.槽已选[在.名] = 选择.槽已选[在.名].filter((k) => k !== 键); return true; }
-
-  const z = 选槽(键);
-  if (!z) return false;
-  const 已有 = 选择.槽已选[z.名] || [];
-
-  if (键量和(已有, z.量) >= (z.需?.最大 ?? 选择.数量.最大)) return false;
-  选择.槽已选[z.名] = [...已有, 键];
-  return true;
+  // ⚠ **取消**：它已经在某个槽里 → 就从**那个**槽取消 ✓
+  //   （同一个键在两个槽时，`选槽` 会返回「已经有它的那个」✓ → 取消的就是它 ✓；再点一次取消另一个 ✓）
+  const 槽表 = 选择.槽表 || [];
+  for (const z of 槽表) {
+    if (z.条件 && z.条件.玩家 !== undefined && z.条件.玩家 !== 待选玩家()) continue;
+    if (!z.候选.has(键)) continue;
+    const 已有 = (选择.槽已选[z.名] || []).filter((k) => z.候选.has(k));
+    if (已有.includes(键)) continue;                                    // 这个槽已装它 → 下一个
+    if (键量和(已有, z.量) >= (z.需?.最大 ?? 选择.数量.最大)) continue;  // 这个槽满了 → 下一个
+    选择.槽已选[z.名] = [...(选择.槽已选[z.名] || []), 键];
+    return true;
+  }
+  // 没有可用槽 → 从**所有**装过它的槽里一起取消 ✓（以前只取消最后一个 ✗ → 会留下"半取消"状态 ✗）
+  const 含有它的 = 槽表.filter((z) => (选择.槽已选[z.名] || []).includes(键));
+  if (含有它的.length) {
+    for (const z of 含有它的) 选择.槽已选[z.名] = (选择.槽已选[z.名] || []).filter((k) => k !== 键);
+    return true;
+  }
+  return false;
 }
-
+/** 渲染问：这个键现在可点吗 / 已选了吗 ✓（高亮与点击都用它 ✓ 不再各写一套 ✗） */
+/** 这个键归哪一槽（多槽时才用 ✓；没有槽表返回 null ✓） */
 function 选槽(键) {
   if (!选择 || !选择.槽表) return null;
   const 我 = 待选玩家();
   for (const z of 选择.槽表) {
-
+    // ⚠ **条件在 B 里判** ✓（来自服务端 需求.槽.条件 ✓）—— 呈现层不再自己判 ✗
     if (z.条件 && z.条件.玩家 !== undefined && z.条件.玩家 !== 我) continue;
     const 已有 = (选择.槽已选[z.名] || []).filter((k) => z.候选.has(k));
     if (z.候选.has(键) && (已有.includes(键) || 已有.length < (z.需?.最大 ?? 1))) return z;
   }
   return null;
 }
-
+/** 这一槽已选了什么 ✓（进度/确认都用它 ✓） */
 function 选槽已选(名) {
   if (!选择) return [];
   if (选择.槽已选 && 名 in 选择.槽已选) return 选择.槽已选[名];
   const z = (选择.槽表 || []).find((x) => x.名 === 名);
-
+  // ⚠ **槽名不认识就返回空** ✗ —— 以前回落到 `已选全()`（= 所有槽的已选）✗：
+  //   施放锦囊时「阵地 / 额外牺牲」这两槽根本不存在 ✓ → 把**所有已选**
+  //   （目标玩家 '玩家1' + 支付的两块地）塞进了 `体.阵地` / `体.额外牺牲` ✓——
+  //   日志里就成了「阵地：玩家1」，wire 上是 `额外牺牲:["玩家1",45,40]` ✗。
   return z ? 已选全().filter((k) => z.候选.has(k)) : [];
 }
-
+/** ⚠ **呈现层唯一该问的** ✓：这个键现在是什么状态（条件/名额都在 B 内部判 ✓） */
+/** ⚠ 呈现层传的是**事实**（这一行属于谁 ✓），条件由 B 判 ✓。
+ *  阵地名两半同名 ✓ —— 不传它的话两半状态永远一样 ✗（10 个全亮 / 两边同时选中 ✓）。
+ */
+/** ⚠ 「能不能点」= 可点 **或** 已选 ✓ —— 选中之后**必须还能点**（点了才是取消 ✓）。
+ *  以前各处用「是不是候选」当能不能点 ✗ → 选完就点不动、取消不了 ✗（2026-02 报的 ✓）。
+ */
 function 选能动(键) { const s = 选态(键); return s === '可点' || s === '已选'; }
 function 选态(键, 行主) {
   if (!选择) return '不可选';
-
+  // ⚠ **条件先判** ✓：阵地名两半同名 ✓ —— 不先判条件的话，对方半场也会显示「已选」✗
+  //   （条件不符 = 这一整槽对你不存在 ✓ 与选没选无关 ✓）
   const 槽 = (选择.槽表 || []).find((z) => z.候选.has(键));
   const 我 = (行主 === undefined || 行主 === null) ? 待选玩家() : 行主;
   if (槽 && 槽.条件 && 槽.条件.玩家 !== undefined && 槽.条件.玩家 !== 我) return '不可选';
-
+  // ⚠ **名额不计入「态」** ✓ —— 选满之后，其他候选**仍是候选**（虚线要在 ✓），
+  //   只是**暂时加不进去**（那由 选点 → 选槽 判 ✓）。以前把「满」当「不可选」✗
+  //   → 选一个阵地，其他格子的虚线全没了 ✓（不直观 ✓ 2026-02 报的 ✓）。
   if (已选全().includes(键)) return '已选';
   return 槽 ? '可点' : '不可选';
 }
-
+/** 某一槽的进度 ✓（呈现层画 x/y；**只有一个来源** ✓ 所以不会出现 2/1 ✗） */
 function 选槽进度(名) {
   const z = (选择 && 选择.槽表 || []).find((x) => x.名 === 名);
   const 已 = 选槽已选(名);
@@ -793,14 +1174,19 @@ function 选槽进度(名) {
 }
 function 选可点(键) { return !!(选择 && 选择.候选.has(键)); }
 function 选已中(键) { return !!(选择 && 已选全().includes(键)); }
+/* ══ 【选】内核结束 ══ */
 
+// （两个「代理」已删 ✗ —— 高亮直连【选】✓）
 function 卡牌(c, 大, 只悬停) {
   if (!c) return '';
   const 需 = 需文(c);
-
+  // 领土没有打出费用，那一格放它的**势力支持**（106.1：印在右上角）
   const 是领土 = c.类别.includes('领土');
-  const 费 = 是领土 ? 供文(c) : ((需 ? 需 + (c.费用 ? ' ' : '') : '') + (c.费用 ? c.费用 : (需 ? '' : '0')));
-
+  const 费 = 是领土 ? 供文(c) : ((需 ? 需 + (费用文字(c.费用) !== '' ? ' ' : '') : '') + (费用文字(c.费用) !== '' ? 费用文字(c.费用) : (需 ? '' : '0')));
+  // 右下角：**只写最终值**（算完的 武力 / 体力上限 ✓）——
+  //   比印制值大 → 绿（up）、小 → 红（dn）、一样 → 白（不加类）✓
+  //   ⚠ 以前是「印制值 + 增减」那种写法（1+2/3-1 ✓）—— 只改显示 ✓，
+  //     用的数据（武力/体力上限/印制武力/印制体力上限）一个没动 ✓。
   const 色 = (终, 印) => (终 > 印 ? 'up' : 终 < 印 ? 'dn' : '');
   const pt = c.是单位 && c.武力 != null
     ? '<span class="pt">'
@@ -810,28 +1196,36 @@ function 卡牌(c, 大, 只悬停) {
       + (c.已受伤 ? '<b class="hurt" title="已受伤：已失去的体力（120.5）">-' + c.已受伤 + '</b>' : '')
       + '</span>'
     : '';
-
+  // 标记单独拎出来做醒目徽章（+1/+1 绿色、「坏」类暗红），和「整备/暗置/关键词」那些灰底 tag 分开
+  // 「+1/+1」已经并进右下角的数值里了，左上角只画**其他标记**（灵值、天命…）
   const 其他标记 = (c.标记 || []).filter((m) => !/^[+]/.test(m));
   const 标记块 = 其他标记.length
     ? '<div class="mk">' + 其他标记.map((m) => '<span>' + esc(m) + '</span>').join('') + '</div>'
     : '';
   const tags = (c.整备 ? '<span class="tag">整备</span>' : '')
              + (c.面 === '暗置' ? '<span class="tag">暗置</span>' : '')
-             +
-
+             + // ⚠ 关键词现在是**条目对象**（{名称,数值,印制}），不是字符串 —— 要取 .名称，
+    //   直接 esc(k) 会渲染成 [object Object]
     (c.关键词 || []).map((k) => '<span class="tag kw">' + esc(typeof k === 'string' ? k : (k.名称 ?? '') + (k.数值 !== undefined ? k.数值 : '')) + '</span>').join('');
 
+    // 合并后的施放面板里，**可付的领土和可选的牌/阵地都要亮** —— 它们都是这一步能点的东西。
     const 是候选 = 选可点(c.uid) || !!(任务 && ((任务.候选 && 任务.候选.has(c.uid))
-      || (任务.候选支付 && 任务.候选支付.has(c.uid))));
-    void 是候选;
+      || (任务.候选支付 && 任务.候选支付.has(c.uid))));   // 选阵地任务没有「候选」
+    void 是候选;   // 交给我 框类() 统一算 ✓
   return '<div class="card p' + c.操控者 + ((选中 === c.uid || 已挑(c.uid)) ? ' sel' : '')
     + 框类(c.uid, 是候选) + (c.横置 ? ' isTapped' : '')
     + (可用牌.has(c.uid) ? ' 可用' : '')
-
+    // ⚠ 暗置的牌服务端**不发牌面**（图 = null，对手不该看到），
+    //   所以要在这里补上卡背 —— 靠 .card.back 的 background-image（web/cards/背面.jpg）。
     + (c.面 === '暗置' ? ' back' : '') + '"'
     + ' onmouseenter="悬停=' + c.uid + ';刷新详情()" onmouseleave="悬停=null;刷新详情()"'
     + (只悬停 ? '' : ' onclick="' + 内联('选牌', c.uid) + '"') + '>'
-
+    // ⚠ **暗置的牌在场上一定画卡背** ✗→✓（用户口径 ✓）：
+    //   "谁能看牌面"现在由服务端按座位算 ✓ —— **热座/上帝视角**下它有权限 ✓ → 暗置牌**会带真图**下来 ✓
+    //   （这是为了**侧边详情 / 查看容器**里能看正面 ✓）。
+    //   但**场上**仍然要画背面 ✓：`.card.back` 的卡背是画在**外层** ✓，
+    //   内层 `.art` 一旦铺了真图就会**盖住它** ✗（2026-10 报的"暗置领土正面显示了" ✓）。
+    //   所以这里按 `面 === '暗置'` 把牌面**挡掉** ✓ —— 别处（详情/容器）照旧用真图 ✓。
     + '<div class="art"' + (c.图 && c.面 !== '暗置' ? ' style="background-image:url(\'' + c.图 + '\')"' : '') + '></div>'
     + (费 ? '<span class="cst">' + 费 + '</span>' : '')
     + '<span class="fac">' + esc(c.势力 ? c.势力.join('/') : '中立') + '</span>'
@@ -844,9 +1238,17 @@ function 卡牌(c, 大, 只悬停) {
     + '</div></div>';
 }
 
+/** 堆叠（405）：正被打出的牌。要能点 —— 无懈可击这类牌的目标就在这儿 */
 function 堆叠行(s) {
   const 层 = s.stack || [];
-
+  // **常驻显示**：空的时候也把框画出来、写「空」——
+  //   不然左栏会随着堆叠有/没有忽高忽低地跳。
+  // ── 上半区：**触发中**（还没进堆叠）──────────────────────────────────
+  // 603.3b：同时触发的多条由**各自的操控者**决定放进堆叠的顺序。
+  //   界面上就是你说的那个分法：堆叠区中间加一条分隔，要选时把「触发中」列在**上面**，
+  //   点一下编顺序（显示 1、2、3…），数量够了按确认才进入下面的堆叠。
+  //   候选直接来自**当前任务**（它就是这次选择），不需要服务端多发字段。
+  // ⚠ 触发时能力**不在堆叠上** —— 所以这一格里的是「还没进去的」，和下面的 层 是两回事。
   let 上 = '';
   if (任务 && 任务.选什么 === '触发' && 任务.候选表 && 任务.候选表.length) {
     const 序 = new Map([...(选择 ? 已选全() : [])].map((k, i2) => [k, i2 + 1]));
@@ -865,11 +1267,12 @@ function 堆叠行(s) {
         ? '（' + 层.length + '）　<span class="dim">从上到下依次结算</span>'
         : '　<span class="dim">空</span>')
     + '</div><div class="row">';
-
+  // 栈顶在最后，倒序显示（栈顶排最前）
   for (let i = 层.length - 1; i >= 0; i--) {
     const 项 = 层[i];
     if (项.卡) { h += 卡牌({ ...项.卡, uid: 项.卡.uid }, true); continue; }
-
+    // 114.9：堆叠上的**能力**（没有牌）—— 也要能点，否则「取消目标能力」那类牌没法选目标。
+    //   候选里能力的 uid 是**负数**（-StackItem.id），和实体/玩家不冲突。
     const 键 = -项.栈id;
     const 可 = 选可点(键);
     const 选 = 已挑(键);
@@ -880,37 +1283,72 @@ function 堆叠行(s) {
   return 上 + h + '</div></div>';
 }
 
+/** 渲染一个玩家的**阵地那一行**（五个格子，每格放它上面的单位） */
 function 阵地行(s, i) {
   const pl = s.players[i];
   let h = '<div class="slots">';
-
+  // ⚠ **对手那一排要左右镜像画**：两个玩家面对面而坐，阵地名是各自「从左至右」起的 ✗ ——
+  //   甲·左边路的**相对**阵地是乙·右边路 ✓，屏幕上要让它**正对着**才不误导 ✓
+  //   （引擎那边 state.ts 的 相对阵地 也改成了同样的镜像 ✓）
+  // ⚠ **参照必须是固定的**（不能按「现在谁在操作」✗ —— 那样每到对方回合整块阵地会翻一次 ✓）。
+  //   规则：两个玩家面对面，各自「从左至右」命名 ✓ → **对手那一排**左右反过来画 ✓，
+  //   这样我左边路上的单位，屏幕上正对着对手的右边路 ✓（和 相对阵地 的映射一致 ✓）。
+  //   热座（单机、我的座位 = null）时以**座位 0（甲）**为参照 ✓ —— 甲的排不镜像、乙的排镜像 ✓，
+  //   整局不变 ✓（只有联机、你坐 1 号位时才会以你为参照 ✓）。
   const 我方号 = (s.我的座位 != null) ? s.我的座位 : 0;
   const 这一排顺序 = (i === 我方号) ? 顺序 : [...顺序].reverse();
   for (const 名 of 这一排顺序) {
     const c = pl.阵地[名];
-
+    // 选阵地任务里，合法阵地高亮可点（301.9：点有人的阵地 = 替任它）
+    // 只有**该玩家自己的**半场才高亮（对面同名的阵地不该亮）
+    // ⚠ 三件事分开 ✓：候选集（画不画框 ✓ 静态）、已选（虚线→实线 ✓）、名额（只决定点击是加还是取消 ✓）。
+    //   以前画框用了「还能不能再加」✗ → 选满后框直接消失、也点不动 ✓（2026-02 报的）。
     const 该槽 = 任务 ? 建槽表().find((z) => z.名 === '阵地') : null;
-
-    const 阵地态 = 选态(名, i);
+    // ⚠ 两段分工 ✓：**条件**（哪半场）来自任务层（沿用旧字段 任务.阵地玩家 ✓ 不新造 ✗）；
+    //   **能不能点/选没选**来自选择系统 ✓（它不认识「阵地」✗）。
+    // ⚠ 只问 B ✓（条件在 B 里 ✓ —— 哪半场/名额/已选 都由它一处回答 ✓）
+    const 阵地态 = 选态(名, i);   // i = 这一行属于谁 ✓（事实 ✓ 条件在 B 里判 ✓）
     const 阵地候选 = 阵地态 === '可点';
-    const 阵地已选 = 阵地态 === '已选';
-
+    const 阵地已选 = 阵地态 === '已选';   // 不再依赖 任务.阵地玩家 ✓（条件在 B 里 ✓）（否则取消后/选满时没实线 ✓）
+    // 阵地名（左边路/左侧翼/…）**写在格子里面** —— 空阵地时它就是格子里的字，
+    //   有牌时牌盖在上面（名字仍在下面垫着，格子是 flex 居中的）。
     h += '<div class="slotwrap"><div class="slot'
       + (阵地候选 ? ' 候选' : '') + (阵地已选 ? ' 选好' : '')
-
+      // ⚠ 选中后也要能点 ✓（点它是取消 ✓）—— 用 可动（可点或已选 ✓），不是「是不是候选」✗
       + ((阵地态 === '可点' || 阵地态 === '已选') ? '" onclick="' + 内联('点阵地', 名) + '"' : '"')
       + '><span class="vn">' + 名 + '</span>'
-
+      // ⚠ 正在选阵地（这一格是候选）时，格子里那张卡**不能挂自己的 onclick** ✗ ——
+      //   卡牌() 默认会挂 onclick="选牌(uid)" ✓，点上去就变成「选那张单位」
+      //   → 本槽 里是 uid、不是阵地名 → 引擎「选的阵地不合法 / NaN」✓
+      //   所以这种时候用**只悬停**渲染（不挂点击 ✓），让点击落到格子的 点阵地(名) 上 ✓
       + (c ? '<span class="slotcard">' + 卡牌(c, true, (阵地态 === '可点' || 阵地态 === '已选')) + '</span>' : '')
       + '</div></div>';
   }
   return h + '</div>';
 }
 
+/* ── 操作条：所有选择统一在这里（手牌区上方）──────────────── */
+
+/** 调度弃牌那一步的确认：弃够张数才让提交 */
+
+/**
+ * **需求驱动的通用面板** —— 服务端说「这一步要选什么」，这里只把它画出来 + 收确认 ✓。
+ * 客户端**不认识任何决定类型** ✗：槽名、要几个、候选叫什么、点完发什么，全部来自 `状态.决定需求` ✓。
+ * ⚠ `槽.呈现 === '按钮'` = 这些候选**不在场上**（座位号 / 张数 / 是否发动）→ 画按钮 ✓ ——
+ *   由服务端声明，客户端不猜哪个键在屏幕上能点 ✗。
+ */
+/**
+ * **这一步的需求** ✓ —— 面板的**唯一信息来源**：
+ *   有任务 → `任务.需求`（动作类：施放/启动/转移/战斗 ✓）；没任务 → `状态.决定需求`（决定类 ✓）。
+ */
 function 当前需求() { return (任务 && 任务.需求) || (状态 && 状态.决定需求) || null; }
 
 function 需求面板(s) {
-
+  // ⚠ **面板读「需求」，不读 `选择.槽表`** ✗ —— 槽的**呈现方式**（`呈现:'按钮'`）与候选的
+  //   **显示名**（`候选.名`）只存在于需求里 ✓；`选择.槽表` 只有「值」（候选键 / 名额 / 已选 / 量）✓。
+  //   以前这里读 `选择.槽表` → `z.呈现` 恒为 undefined ✗ → 每个「按钮槽」
+  //   （决定先手 / 调度宣告 / 看牌库顶 / 可选触发）都退化成**点不动的进度条** ✗，
+  //   整个面板只剩「随机 / 确认」能按 ✓（用户截图那个 ✓）。值仍然只从【选】取 ✓（一处状态 ✓）。
   const 需0 = 当前需求() || {};
   const 槽表 = 需0.槽 || [];
   let x = '<span class="who">' + esc(需0.标题 || (选择 && 选择.名字) || '请选择') + '</span>';
@@ -926,17 +1364,33 @@ function 需求面板(s) {
           + esc(c.名 != null ? c.名 : String(c.键)) + '</button>';
       }
     } else {
-
+      // ⚠ **候选带 `区` 时，直接在面板里按区域分组画可点的牌子** ✓
+      //   为什么要这样：候选可能在**牌库/墓地**这种"棋盘上看不到"的地方 ✗ ——
+      //   以前只能靠"自动开一块查看器"✗，而查看器与选择是两回事 ✓（用户定的口径：
+      //   查看是随时能开的自由界面 ✓，**要你选的东西一律在这个面板里表达** ✓）。
+      //   ⚠ 没有 `名` = 服务端不给牌面 = 你看不到 → 画「背面」✓（客户端不猜牌名 ✗）。
+      // ⚠ **面板里不列候选** ✗→✓（用户口径 ✓）：
+      //   · 候选在**棋盘 / 查看容器**里点 ✓（那里画着牌 ✓，点中即计入这一槽 ✓）；
+      //   · 面板只显示"槽名 + 已选 / 需" ✓；
+      //   · 只有服务端标了 `呈现:'按钮'` 的槽（决定先手 / 选项 / 看牌库顶 / 可选触发 ✓）
+      //     才在面板里画按钮 ✓ —— 那些候选**不是牌** ✓（棋盘上没有它们 ✓）。
+      //   ⚠ 我前几轮在这里列过一串候选（先画牌 ✗、后改成按钮 ✗）—— 都是多余的 ✓，已撤掉 ✓。
       const 需小 = (z.需?.最小 ?? 0), 需大 = (z.需?.最大 ?? 0);
       const 文 = 需小 > 0 ? (已量 + '/' + 需小) : (已量 + (需大 > 0 ? '（最多 ' + 需大 + '）' : ''));
       x += '<span' + (够 ? '' : ' class="notyours"') + '>' + esc(z.名) + ' ' + 文 + '</span>'
     }
   }
   x += '<span class="spacer"></span>';
-
+  // ⚠ **查看入口**：文本统一用「查看」✓（用户口径 ✓）—— 检视/展示不改词 ✓。
+  //   计数**直接数当前需求里"带牌面的候选"** ✓（不再读累积的 `可见登记` ✗）：
+  //   只在候选来自**棋盘上看不到的区域**（牌库/手牌 ✓）时才给这个入口 ✓
+  //   —— 战场/墓地的候选棋盘上本来就看得见 ✓，不必再开一块容器 ✗。
   {
     const 需0 = 当前需求();
-
+    // ⚠ **只认服务端那句话** ✓：`槽.可查看`（"这些候选是可以查看的牌" ✓）。
+    //   客户端**不再猜**"有没有牌面 / 是不是隐藏区" ✗ —— 上一版就是猜的，
+    //   结果两头出错 ✓：开局"决定先后手"那步冒出「查看」✗、103.6 检视牌库顶那步又没有 ✗。
+    // ⚠ 优先用「服务器给的查看内容」✓（规范：查看 = 服务器发的、只读 ✓）；槽.可查看 只是过渡兜底 ✓。
     const 查看数 = ((需0 && 需0.查看) || []).length;
     const 可查看 = [];
     for (const z of (需0 && 需0.槽) || []) {
@@ -948,9 +1402,13 @@ function 需求面板(s) {
         + (查看数 || 可查看.length) + ' 张）</button>';
     }
   }
+  // ⚠ 「不选 / 未搜寻到 / 随机」也是服务端给的**模板 + 文字**（701.17b / 热座随机）✓
+  //   —— 客户端不拼 `接受:false`、也不认「随机」这种语义 ✗
 
-  if (需0.放弃后发) x += '<button class="act" onclick="放弃选择()">' + esc(需0.放弃名 || '不选') + '</button>';
-
+  // ⚠ **需要双方确认的步骤**（展示 ✓）：按服务端给的 `双方确认` 画按钮 ✓ ——
+  //   · 联机：只画**自己**那个 ✓（别人的按不了 ✓），并标出"谁已确认" ✓；
+  //   · 热座：`我的座位 == null` → **两个都画** ✓（各按一次 ✓，顺序无关 ✓）。
+  //   这一步**没有别的可选** ✓ → 画完直接 return（不画普通的"提交/放弃" ✓）。
   {
     const 双方 = 状态 && 状态.双方确认;
     if (双方 && Array.isArray(双方.已)) {
@@ -966,38 +1424,64 @@ function 需求面板(s) {
     }
   }
   x += '<button class="act" onclick="提交(false)"' + (槽都够了吗(建槽表()) ? '' : ' disabled') + '>确认</button>';
+  // ★ 取消放**右边**（确认之后）✓ —— 主动作在左、次动作在右 ✓
+  if (需0.放弃后发) x += '<button class="act" onclick="放弃选择()">' + esc(需0.放弃名 || '不选') + '</button>';
   return x;
 }
-
+/** 放弃分支：照服务端给的模板发 ✓（没有模板就当没有这个按钮 ✓） */
 function 放弃选择() {
   const 需0 = 当前需求();
   if (需0 && 需0.放弃后发) 动作(JSON.parse(JSON.stringify(需0.放弃后发)));
 }
-
+/**
+ * **展示这类"双方确认"步骤**：把"替哪个座位确认"发上去 ✓。
+ * ⚠ `确认座位` 只是一个**身份**（不是规则语义 ✓）—— 联机时服务端按令牌核对 ✓，
+ *   热座时它是**唯一**能区分"甲按的 / 乙按的"的东西 ✓（一屏两个按钮 ✓）。
+ */
 function 确认展示(座) {
   const 需0 = 当前需求();
-
+  // ⚠ 走**同一套模板填充** ✓（`填模板` ✓）—— 直接拷 `确认后发` 会把 `'$选'` 这种占位符原样发出去 ✗
   const 包 = (需0 && 填模板(需0, 选择)) || { 种类: '决定', 接受: true };
-
+  /**
+   * ⚠ **`选` 一定要带上**（哪怕是空数组 ✓）✗→✓：
+   *   展示这类步骤 `需 {0,0}` ✓ → `填模板` 认为"这一步没得选" ✓ → 把 `'$选'` **整个省掉** ✗
+   *   → 发出去的决定包**形状不全** ✓（实测：`{"种类":"决定","接受":true,"确认座位":1}` ✓ 没有 `选` ✓）
+   *   → 服务端那边这一包就不成立 ✓ = **点了确认却一直停在原地** ✓（2026-10 报的"确认不了" ✓）。
+   */
   包.选 = 包.选 ?? [];
   包.确认座位 = 座;
   动作(包);
 }
 
+/**
+ * 操作条 —— **全局唯一的「现在该干什么」出口**。
+ *
+ * ⚠ 以前开局走一条单独的支路（`if (s.开局.阶段 !== '完成') return 开局操作条(s)`），
+ *   那条支路**跳过了下面这个「轮不到自己」的判断** —— 于是联机时两边都画出可点的按钮，
+ *   而且每个开局阶段要自己记得判一次「该谁」（漏了三次）。
+ *   现在开局和回合都从 `s.当前请求` 来：「谁在动」只有 `请求.玩家` 一处表示。
+ */
 function 操作条内容(s) {
   if (s.over) return '<span class="who">对局结束</span><span class="dim">'
     + (s.winner === null ? '平手' : esc(s.players[s.winner].名字) + ' 获胜') + '</span>';
   const req = s.当前请求;
   if (!req) return '<span class="dim">引擎处理中…</span>';
-
+  // 联机（非热座）：**只有该动的人才能操作** ✓ —— 这件事现在由**服务端**说 ✓（`可操作` ✓）：
+  //   服务端知道"这一步是谁的 ✓ / 展示那种要双方各自确认 ✓"，客户端不再自己推断 ✗
+  //   （我原来的推断 + "展示是例外"的补丁 ✓ 已删 ✗ —— 那个例外一放宽就让不该看的人看到内容 ✗）。
   const 能动 = (typeof s.可操作 === 'boolean') ? s.可操作 : 能操作(s, req.玩家);
-
+  // ⚠ **「查看」入口不吃"轮到谁"** ✗→✓（用户铁律：查看是玩家自己的界面状态 ✓，与选择分开 ✓）：
+  //   展示那种步骤，**对方也有权看那几张牌** ✓ —— 以前这个按钮长在面板里 ✗，
+  //   而面板被 `可操作` 门挡着 ✓ → 不是自己回合的那一方**连看都看不了** ✗
+  //   （2026-10 报的"只有自己能看" ✓ / "无法确认" ✓ 都是这条 ✓）。
   const 看 = ((当前需求() || {}).查看 || []);
   const 查看按钮 = 看.length
     ? ' <button class="act" onclick="' + 内联('开查看', '检视', -1) + '">查看（' + 看.length + ' 张）</button>'
     : '';
   if (!能动) {
-
+    // ⚠ **展示这类"要双方确认"的步骤**：等的是**还没确认的那一方** ✓，不是"发起请求的那个人" ✗。
+    //   以前照抄 `req.玩家` ✗ → 甲确认后，甲那页还写着"甲 行动中…轮到对方" ✓
+    //   → 看起来像卡在自己这儿 ✓（2026-10 报的 ✓）。
     const 双方 = s.双方确认;
     if (双方) {
       const 缺 = (双方.需要 || []).filter((x) => !(双方.已 || []).includes(x));
@@ -1007,27 +1491,34 @@ function 操作条内容(s) {
     return '<span class="who">' + esc(s.players[req.玩家].名字) + ' 行动中…</span>'
       + '<span class="dim">（' + esc(req.步骤 || '—') + '）轮到对方，你暂时没有可做的</span>' + 查看按钮;
   }
-
+  // ── **需求驱动的通用面板** ✓：这一步要选什么，由服务端的需求说 ✓
+  //   ⚠ 只在**没有「任务」**时用它 ✓ —— 有任务时走下面那条统一面板（施放/启动那种多槽面板）✓；
+  //     两者都是【选】的界面，只是信息来源不同：需求 / 任务 ✓。
+  // ⚠ **要双方确认的步骤（展示 ✓）：确认按钮必须画在"面板之外"** ✗→✓
+  //   以前那两块按钮长在 `需求面板` 里 ✗ —— 而展示这类步骤在客户端走的是**任务面板** ✓
+  //   → 那里没有确认按钮 ✓ → **甲乙谁都没法确认** ✓（2026-10 报的"还是不能确认" ✓ 就是这个 ✓）。
+  //   放在这里还有个好处：它是**步骤级**的东西（服务端 `双方确认` 说了算 ✓），
+  //   与"这一步要选什么"无关 ✓（展示本身 `需 {0,0}` ✓，没有别的要填 ✓）。
   if (s.双方确认) {
     const 我的座 = s.我的座位;
     const 座s = (s.双方确认.需要 || [])
-      .filter((座) => 我的座 === null || 我的座 === -1 || 座 === 我的座);
+      .filter((座) => 我的座 === null || 我的座 === -1 || 座 === 我的座);   // 联机只看自己那个 ✓；热座两个都画 ✓
     let y = '<span class="who">' + esc(req.步骤 || '展示') + '</span>';
     for (const 座 of 座s) {
       const 已 = (s.双方确认.已 || []).includes(座);
       y += '<button class="act' + (已 ? ' on' : '') + '"' + (已 ? ' disabled' : '')
         + ' onclick="' + 内联('确认展示', 座) + '">' + esc(s.players[座].名字) + (已 ? ' 已确认' : ' 确认') + '</button>';
     }
-
+    // 联机时把"对方还没确认"也写出来 ✓（不给按钮 ✗，但要看得出在等谁 ✓）
     const 缺 = (s.双方确认.需要 || []).filter((座) => !(s.双方确认.已 || []).includes(座) && !座s.includes(座));
     if (缺.length) y += '<span class="dim">（' + 缺.map((座) => esc(s.players[座].名字)).join('、') + ' 待确认…）</span>';
     return y + 查看按钮;
   }
   if (!任务 && req.决定 && 选择 && 选择.槽表) return 需求面板(s);
-
+  // ── 统一选择任务：操作区只显示进度 + 不选/确认/取消 ──
   if (任务) {
     let x = '';
-
+    // 「宣告」有多个模式时，模式按钮要跟着任务条一起显示（选了模式才知道有哪些目标可点）
     const d0 = req.决定;
     if (d0 && d0.类型 === '宣告' && d0.模式候选) {
       if (会话.模式 === null || !d0.模式候选.some((m) => m.索引 === 会话.模式)) 会话.模式 = d0.模式候选[0].索引;
@@ -1037,33 +1528,62 @@ function 操作条内容(s) {
       });
       x += '<span class="spacer"></span>';
     }
-
+      // ⚠ 这里必须留 `x +=` —— X 费牌的 X 不用输入框，但类型和说明这两行还得接上去。
+      //   （之前按行删输入框时把 `x +=` 一起删了，剩下以 `+` 开头的三行是**合法语句**：
+      //     一元加算出字符串就丢掉了，语法检查根本抓不到 —— 表现就是操作条上什么都不显示。）
+      /**
+       * ⚠ **进度一律从「需求」的槽来** ✓（任务条也要画 ✓）——
+       *   以前这里是 `if/else` **语句** + 后面两行以 `+` 开头 ✗ → 那两行变成**一元加** ✗ 直接丢掉 ✓
+       *   （就是上面注释 1467-1469 自己写的那个坑 ✓，又被写回来了 ✗）：
+       *   结果进度/说明**从来没渲染过** ✓ —— 甘夫人第一次确认里那个「单位 0（最多 1）」就是这么消失的 ✓。
+       *   现在：需求有槽 → 按槽画 `名 已选/需`（或 `已选（最多 N）`）✓；没有槽才退回任务自带的说明 ✓。
+       */
+      const 需条 = 任务.需求;
+      const 槽们 = (需条 && 需条.槽) || [];
+      const 槽文 = (z) => {
+        const 已 = (选槽已选(z.名) || []).length;
+        const 文 = z.需.最小 > 0 ? (已 + '/' + z.需.最小) : (已 + (z.需.最大 > 0 ? '（最多 ' + z.需.最大 + '）' : ''));
+        return esc(z.名) + ' ' + 文;
+      };
+      const 进度文 = 槽们.length
+        ? 槽们.map(槽文).join('　')
+        : (任务.是槽表
+            ? 建槽表().map((z) => z.名 + ' ' + z.已选.length + '/' + z.需.最小 + (z.已选.length < z.需.最小 ? '（还差）' : '')).join('　')
+            : esc(任务.说明 || ''));
       x += '<span class="who">' + esc(任务.类型) + '</span>'
-
-        if (任务.是槽表) {
-          x += '<b>选</b> ' + 建槽表().map((z) => z.名 + ' ' + z.已选.length + '/' + z.需.最小 + (z.已选.length < z.需.最小 ? '（还差）' : '')).join('　');
-        } else {
-          x += '<b>选</b> ' + esc(任务.说明 || '');
-        }
-        + '<span>' + esc(任务.说明) + '（已选 ' + 建槽表().reduce((n, z) => n + z.已选.length, 0) + '/' + 任务.数量.最大 + '）</span>'
+        + '<b>选</b> ' + 进度文
         + '<span class="spacer"></span>';
-
+    // 支付和选择**在同一个面板**：这里把两个进度并排显示，确认要两边都齐。
+    //   清空支付不用单独一个按钮 —— 「取消」会清整个会话（支付源也存在 宣告选 里）。
     if (任务.需支付 > 0) {
-
+      // ⚠ **按槽取数** ✓（以前这里是全局已选数 ✗ → 选了阵地+领土会显示「支付 2/1」✗）
   const 付了 = 已付额(选槽已选('支付源'));
       x += '<span' + (付了 >= 任务.需支付 ? '' : ' class="notyours"') + '>支付 ' + 付了 + '/' + 任务.需支付 + '</span>';
     } else if (任务.支付是X) {
-
+      // 108.3a：X 由操控者宣告 —— 在这里**挑几块地就是几**
       const 付了 = 已付额(选槽已选('支付源'));
       x += '<span>X = ' + 付了 + '　挑几块地就是几</span>';
     }
     if (任务.可放弃) x += '<button class="act" onclick="提交(true)">不选</button>';
+    // 两个槽各按自己的「量」判（目标按个数，支付按点数）
 
+    // ⚠ 本步挑的东西全在 本槽()（阵地名、目标键…），领土在 支付槽() —— 所以目标量就是本槽的量。
+    //   以前用 非支付候选()（= 候选 减去 领土）算，而「阵地」那一步的候选**只有领土**，
+    //   于是目标量恒为 0、数量下限 1 永远够不上，确认永远按不动。
+    // ⚠ 目标量**不数启动费用**（弃牌/牺牲那些）—— 它们有自己的 费用需 门禁
+    // 「目标量」只数**目标**：领土（支付候选）和阵地（候选阵地）也躺在 本槽 里，不能算进来 ——
+  //   否则单位施放会因为「已选 1/0」把确认按钮锁死（这就是李典/甄姬按不动确认的原因）。
+  // 哪些键**不是目标**：支付（领土）和启动费用（弃牌/牺牲/额外牺牲）永远不算；
+  // 阵地要看情况 —— 「转移」那种任务**目标就是阵地本身**（候选池是空的，阵地池才是它），
+  // 而「施放」那种多槽任务里，阵地只是并列的一个槽。判据：任务有没有自己的候选池。
   const 阵地算目标 = !(任务.候选 && 任务.候选.size > 0);
   const 是别的槽 = (k) => (任务.候选弃牌 && 任务.候选弃牌.has(k)) || (任务.候选牺牲 && 任务.候选牺牲.has(k))
     || (任务.候选额外 && 任务.候选额外.has(k)) || (任务.候选支付 && 任务.候选支付.has(k))
     || (!阵地算目标 && 任务.候选阵地 && 任务.候选阵地.has(k));
-
+  // ⚠ 「只挑费用」的那几步（额外牺牲 / 费用牺牲）挑中的键属于 候选额外/候选牺牲，
+  //   会被 是别的槽 排除掉 → 目标量恒 0。所以这几步直接拿 本槽 的个数当目标量。
+  // ⚠ 文字和按钮**必须同一个来源**（槽表）—— 以前文字另算一套（目标量/钱量/费量），
+  //   于是可能出现「文字说够了、按钮还是灰」这种自相矛盾，排查时会被它带偏 ✗
   const __槽们 = 建槽表();
   const __槽 = (名) => __槽们.find((z) => z.名 === 名);
   const 目标量 = 任务.只挑费用 ? (__槽('额外牺牲')?.已选.length ?? __槽('费用牺牲')?.已选.length ?? __槽('费用弃牌')?.已选.length ?? 0)
@@ -1072,29 +1592,40 @@ function 操作条内容(s) {
     const 钱量 = 选择 ? 已选全().filter((k) => 任务.候选支付 && 任务.候选支付.has(k)).length
                      : 计数(选槽已选('支付源'), 任务.候选支付);
 
+    // 启动费用（602.1d）也是数量门禁的一部分：本槽里属于费用候选的那些够不够
     const 费量 = [...已选全()].filter((k) => (任务.候选弃牌 && 任务.候选弃牌.has(k)) || (任务.候选牺牲 && 任务.候选牺牲.has(k)) || (任务.候选额外 && 任务.候选额外.has(k))).length;
-
+  // ⚠ 「确认亮不亮」= **所有槽都够了吗** —— 和 能加 用同一套模型（以前这里把名额又算一遍 ✗，
+  //   于是每加一张牌都要在 能加 / 门禁 / 落槽 三处各改一次，漏一处就卡住）。
   const 齐 = 槽都够了吗(建槽表());
-
+    // ⚠ **检视/搜寻面板在场时，这里不再画确认** ✗ —— 那个面板自己带「确认 / 未搜寻到」✓；
+  //   两处都画就是**同一个动作两套界面**✗（点了下面那个还会因为参数对不上报
+  //   「Uncaught TypeError: 选 is not iterable」✓ —— 2026-02 报的 ✓）。
+  // ⚠ 以前这里还要「检视/搜寻面板在场时**不画确认**」✗ —— 现在那条面板已经不存在了 ✓
+  //   （检视 = 一块区域视图，确认就画在这里 —— **确认只有一个家** ✓）。
   x += '<button class="act" onclick="提交(false)"' + (齐 ? '' : ' disabled') + '>确认</button>';
     if (任务.可取消) x += '<button class="act" onclick="取消任务()">取消</button>';
     return x;
   }
   const d = req.决定;
+  // 宣告任务换人/换模式时要重来（任务条是每次 render 现算的，状态得自己清）
+  // ⚠ **弃牌 / 选项 / 可选触发 三个死分支已删** ✗ —— 它们以前在这里自己画按钮并拼字段名
+  //   （弃牌:[…] / 选:[…] / 接受:true|false）✓。现在这三类决定都有需求 → 走 需求面板() ✓，
+  //   那一段在**本函数开头**就已经 return 了（if (!任务 && req.决定 && 选择 && 选择.槽表)）✓。
 
+  // 普通优先权
   const p = req.玩家;
   const 我位 = s.我的座位 == null ? null : s.我的座位;
   const 是我 = 我位 === null ? null : (p === 我位);
-
+  // 回合归属：优先权可以是别人的（比如甲的回合里乙也有优先权），所以两个都要写
   const 主动名 = esc(s.players[s.active].名字);
   const 是他的回合 = p === s.active;
-  let h = '<span class="turninfo">第 ' + s.turn + ' 回合 · <b>' + 主动名 + '的回合</b>'
+  let h = '<span class="turninfo"><b>' + 主动名 + '的回合</b>'
     + (是他的回合 ? '' : '<span class="notyours">（现在轮到 ' + esc(s.players[p].名字) + ' 拿优先权）</span>')
     + '</span>'
     + '<span class="who">' + esc(s.players[p].名字) + ' 的优先权</span>'
     + '<span class="dim">' + esc(req.步骤) + (我位 === null ? '（热座：你在替 ' + esc(s.players[p].名字) + ' 操作）'
       : (是我 ? '（你）' : '（对手操作中）')) + '</span>';
-
+  // 联机时对方在动 → 这一条只说「等待」（对方的牌点了也不会动，服务端按座位拒绝）
   if (我位 !== null && !是我) {
     return h + '<span class="dim">等 ' + esc(s.players[p].名字) + ' 操作……</span>';
   }
@@ -1102,22 +1633,25 @@ function 操作条内容(s) {
   if (待选) {
     const a = 待选.动作;
     h += '<span>' + esc(a.标签) + '</span>';
-
+    // ⚠ 攻击对象不在这里列按钮了 —— 它走 当前任务 的【选】（和别的点选同一个模型）。
+    // ⚠ **施放不走这里** —— 它由 当前任务 的「统一选择模型」接管（阵地和支付是同一个面板里的两个槽）。
+    //   这里以前还留着一个「阵地下拉框 + 确认」的旧兜底，于是当 任务 恰好是 null 时界面会**退化回下拉框**
+    //   —— 同一件事的第二条路，已经删掉。打领土也不再需要「选明置/暗置」这一步：
+    //   引擎现在把明置和暗置**给成两条并列的动作**（`面` 写在动作里），和「施放」一样一次列完。
     h += '<button onclick="待选=null;render()">取消</button>';
   } else {
     const 能用 = (s.合法动作 || []).filter((a) => a.uid != null);
     if (选中) {
       const 可做 = 能用.filter((a) => a.uid === 选中);
-
+      // ⚠ **不再给「换阵地」开小灶** ✗ —— 702.16 转移 / 116.2c 许可（【急行军】）的**多个目的地**
+      //   已经由**服务端**并成一条动作、放进需求的「到」槽 ✓（server.ts 的 合并同族动作 ✓）。
+      //   客户端这里只画按钮 ✓ —— 它不再认识任何动作种类 ✓（以前这段按路径去重、只取第一条，
+      //   于是「【急行军】只能移到最左边的左边路」✗ —— 2026-02 报的 ✓）。
       可做.forEach((a) => {
         h += '<button class="act" onclick="' + 内联('点动作', s.合法动作.indexOf(a)) + '">' + esc(a.标签) + '</button>';
       });
       if (!可做.length) h += '<span class="dim">这张牌现在不能用</span>';
       h += '<button onclick="选中=null;render()">取消选择</button>';
-    } else {
-      h += 能用.length
-        ? '<span class="dim">点带金框的牌来操作</span>'
-        : '<span class="dim">现在没有能用的牌 —— 通常是在等结算或等你做一个选择，看上面的提示</span>';
     }
   }
   if ((s.合法动作 || []).some((a) => a.种类 === '让过')) {
@@ -1126,6 +1660,7 @@ function 操作条内容(s) {
   return h;
 }
 
+/** 渲染一个玩家的半场：阵地五行 + 两侧的牌库/墓地栏。`侧` = '上' | '下'（决定顺序镜像） */
 function 半场(s, i, 侧) {
   const pl = s.players[i];
   const 领土 = pl.阵地外.filter((c) => c.类别.includes('领土'));
@@ -1135,12 +1670,31 @@ function 半场(s, i, 侧) {
   const 手牌内容 = pl.隐藏手牌
     ? (pl.手牌张数 ? Array.from({ length: pl.手牌张数 }, () => '<div class="card back" title="对手手牌：401/402 隐藏区"></div>').join('') : '<span class="empty">（无）</span>')
     : (pl.手牌.length ? pl.手牌.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>');
-  const 手牌行 = '<div class="handrow" style="grid-column:1/-1"><div class="zlabel">手牌（' + 手牌数 + '）'
+    // ★ 玩家框（在手牌区右边，同高）：体力（兼「选这个玩家」的点击目标）+ 势力支持
+  const 玩家框 = (() => {
+    const 玩键 = '玩家' + i;
+    const 可 = 选可点(玩键);
+    const 选 = 选已中(玩键);
+    const 体力块 = '<div class="pile">体力<b>' + pl.体力 + '/' + pl.体力上限 + '</b></div>';
+    const 支持块 = '<div class="pile">势力支持<b>' + (Object.entries(pl.支持).map(([k, v]) => 符号[k] + v).join('') || '无') + '</b></div>';
+    // 点击区域 = 整个玩家框（不再只点体力条）
+    const 可点 = 可 || !!(选择 && 选已中(玩键));
+    return '<div class="playerbox' + 框类(玩键, 可) + '"'
+      + (可点 ? ' onclick="' + 内联('点选', 玩键) + '" title="选这个玩家为目标"' : '')
+      + '><div class="zlabel">' + esc(pl.名字) + '</div>' + 体力块 + 支持块 + '</div>';
+  })();
+  const 手牌列 = '<div class="handcol"><div class="zlabel">手牌（' + 手牌数 + '）'
     + (pl.隐藏手牌 ? '<span class="dim"> 隐藏</span>' : '') + '</div>'
     + '<div class="zone"><div class="row">' + 手牌内容 + '</div></div></div>';
+  // ★ 对手半场**镜像**：玩家框放到左边（左上角）；我方在右边
+  const 手牌行 = '<div class="handrow" style="grid-column:1/-1">'
+    + (反向 ? 玩家框 + 手牌列 : 手牌列 + 玩家框)
+    + '</div>';
   const 领土块 = '<div><div class="zlabel">领土（' + 领土.length + '）</div><div class="zone"><div class="row">'
     + (领土.length ? 领土.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>') + '</div></div></div>';
-
+  // ⚠ 分区名字按**规则书**：403.1「战场分为**阵地**和**阵地以外的战场**……由玩家操控的
+  //   非单位实体放在自己面前的战场上」。所以这里不叫「阵略/战器」—— 那只是这个区域里
+  //   最常见的两类牌；**没有阵地的单位**（301.8 失去阵地）也放在这里。
   const 战场块 = '<div><div class="zlabel" title="403.1：战场分为阵地和阵地以外的战场。没有阵地的单位也放在这里">阵地以外的战场（' + 战场.length + '）</div><div class="zone"><div class="row">'
     + (战场.length ? 战场.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>') + '</div></div></div>';
   const 牌堆 = '<div><div class="zlabel">牌库 / 墓地</div>'
@@ -1150,30 +1704,34 @@ function 半场(s, i, 侧) {
     + '<span class="zb-label">牌库</span><span class="zb-count">' + pl.牌库张数 + '</span></div>'
     + '<div class="zonebox" onclick="' + 内联('开查看', '墓地', i) + '" title="404.2：墓地是公开区，可以随时检视">'
     + '<span class="zb-label">墓地</span><span class="zb-count">' + pl.墓地对数 + '</span></div>'
-    + '</div>'
-
-    + (() => {
-      const 玩键 = '玩家' + i;
-      const 可 = 选可点(玩键);
-
-      const 选 = 选已中(玩键);
-      return '<div class="pile' + 框类(玩键, 可) + '" style="margin-top:3px"'
-        + ((可 || (选择 && 选已中(玩键))) ? ' onclick="' + 内联('点选', 玩键) + '" title="选这个玩家为目标"' : '')
-        + '>体力<b>' + pl.体力 + '/' + pl.体力上限 + '</b></div>';
-    })()
-    + '<div class="pile">势力支持<b>' + (Object.entries(pl.支持).map(([k, v]) => 符号[k] + v).join('') || '无') + '</b></div></div>';
+    + '</div></div>';
   const 中场 = '<div class="mid2">' + (反向 ? 领土块 + 战场块 : 战场块 + 领土块) + '</div>';
-
+  // 阵地行不再带「我方（甲）的阵地」标题 —— 名字已经写在格子里了。
   const 阵 = '<div style="grid-column:1/-1">' + 阵地行(s, i) + '</div>';
-
+  // 「谁在动」**只有一处**：生成器 yield 出来的请求带的玩家（开局和回合都一样）
   const 行动者 = s.当前请求 ? s.当前请求.玩家 : null;
   const 是当前 = (行动者 === 'both' || 行动者 === i) && !s.over;
-
+    // 全页只有这一条操作区（放在我方半场）。它**永远显示当前该动那一方**的操作：
+  // 热座时轮到另一位玩家，操作区就显示他的动作（先在牌面上点他的牌，动作再出现在操作区）；
+  // 联机时对方回合，操作条内容会自己退化成「等 XX 操作……」
   const 操作条 = '<div class="opbar">' + 操作条内容(s) + '</div>';;
   const 内容 = 反向
-    ? 手牌行 + 牌堆 + 中场 + 阵
+    ? 手牌行 + 牌堆 + 中场 + 阵          // 对手半场：**不放操作条**（操作区只有下面一条）
     : 阵 + 中场 + 牌堆 + 操作条 + 手牌行;
-
+  // 「有可用」加在那个半场，就触发 CSS 那条
+  //   .half.有可用 .card:not(.可用):not(.候选):not(.选好){ filter: brightness(.5) saturate(.65) }
+  //   → **能用的牌亮，其余全压暗；一张都用不了时所有牌都压暗**。
+  //
+  // ⚠ 以前写的是「&& 可用牌.size > 0」—— 只在一张都用不了时**反而不压暗**，全亮，容易误以为还能打。
+  //
+  // 压在哪个半场：
+  //   热座（我位 === null）：压在**该他动的那个半场**（热座两边都能操作，看轮到谁）
+  //   联机（我位 != null）：**只压我方半场** —— 对方回合我什么都不能做，我的手牌也该是黑的
+  //     （对方的半场不压：那不是我能操作的，压了反而像在提示什么）
+  //
+  // ⚠ 开局流程（决定先手 / 调度宣告 / 调度执行 / 后手看牌库顶）**不压暗** ——
+  //   那些阶段手牌是点着选的，而且 可用牌 本来就是空的，压暗会让人以为不能选。
+  // 开局做完 = 服务端把 g.开局 置成 null 了 —— 不再有「阶段: 完成」这种状态
   const 对局中 = !s.开局;
   const 热座 = s.我的座位 == null;
   const 该压暗 = 对局中 && (热座 ? 是当前 : i === s.我的座位);
@@ -1181,9 +1739,12 @@ function 半场(s, i, 侧) {
     + (是当前 ? ' acting' : '') + (该压暗 ? ' 有可用' : '') + '">' + 内容 + '</section>';
 }
 
+/** uid → 牌面数据。找遍所有区域（含隐藏区），找不到返回 null */
 function 找牌(uid) {
   if (uid == null) return null;
-
+  // **当前需求里带牌面的候选**（隐藏区那些 ✓）：服务端只在"这次允许你看"时才带牌面 ✓，
+  //   所以「在这里找到」就等于「我看得到」✓ —— 和以前查 `可见登记` 是同一个道理 ✓，
+  //   但来源换成**当前这一步**✓ → 不会再出现"容器里画着、详情却查不到"或残留 ✗（用户口径：牌随需求走 ✓）。
   {
     const 需0 = 当前需求();
     for (const z of (需0 && 需0.槽) || []) {
@@ -1194,19 +1755,22 @@ function 找牌(uid) {
     for (const c of pl.手牌) if (c.uid === uid) return { c, 处: '手牌', 我: pl.index };
     for (const c of pl.阵地外) if (c.uid === uid) return { c, 处: '战场', 我: pl.index };
     for (const k of 顺序) { const c = pl.阵地[k]; if (c && c.uid === uid) return { c, 处: '阵地 ' + k, 我: pl.index }; }
-
+    // ⚠ 下面这几处以前漏了 —— 结果**查看器里的牌鼠标放上去查不到**（详情一直是空白）。
+    //   查看器看的就是墓地和放逐区；堆叠上的牌也要能点、能看。
     for (const c of pl.墓地) if (c.uid === uid) return { c, 处: '墓地', 我: pl.index };
   }
   for (const c of (状态.放逐区 || [])) if (c.uid === uid) return { c, 处: '放逐区', 我: null };
   for (const it of (状态.stack || [])) if (it.卡 && it.卡.uid === uid) return { c: it.卡, 处: '堆叠', 我: it.操控者 };
   return null;
 }
-
+/** 这张牌现在能做哪些动作（从 `状态.合法动作` 里筛）。详情框用它列按钮 */
 function 该牌动作(uid) { return (状态.合法动作 || []).filter((a) => a.uid === uid); }
 
+/** 详情框现在该显示什么：开局 > 查看器 > 悬停/选中的牌 */
 function 详情内容() {
   const o = 状态 && 状态.开局;
-
+  // ⚠ **不再拿「可见登记」的第一张当侧边详情框的默认显示**：检视在新界面里已经统一实现了
+  //   —— 效果检视走查看器/检视面板，103.6 开局检视走开局面板，侧边再显示一遍就是同一信息出现两次。
   const uid = 悬停 != null ? 悬停 : 选中;
   const f = 找牌(uid);
   if (!f) return '<div class="dhead"><div class="dname">卡牌信息</div>'
@@ -1216,22 +1780,26 @@ function 详情内容() {
   return '<div class="dhead"><div class="dname">' + esc(c.名称) + '</div>'
     + '<div class="dmeta">' + esc(类文(c)) + '　' + esc(c.势力 ? c.势力.join('/') : '中立')
     + (c.是单位 ? '　' + c.武力 + '/' + c.体力上限 + (c.已受伤 ? '（受伤 ' + c.已受伤 + '）' : '') : '')
-    + '　费用 ' + c.费用 + (需文(c) ? '　需求 ' + 需文(c) : '') + (供文(c) ? '　提供 ' + 供文(c) : '')
-
+    + '　费用 ' + 费用文字(c.费用) + (需文(c) ? '　需求 ' + 需文(c) : '') + (供文(c) ? '　提供 ' + 供文(c) : '')
+    // ⚠ 放逐区是**共享区**（400）—— 找牌() 给它的 我 是 null。
+    //   以前这里写的是 players[f.我].名字，鼠标一移到放逐区的牌上就抛
+    //   「Cannot read properties of undefined (reading '名字')」。
     + '<br>' + esc(f.处) + '（' + esc(状态.players[f.我]?.名字 ?? '共享区') + '）'
     + (c.横置 ? '　横置' : '') + (c.整备 ? '　整备' : '') + (c.面 === '暗置' ? '　暗置' : '') + '</div></div>'
-
+    // ⚠ 暗置牌：**服务端给图就给** ✓（有权限的人拿到的是真牌面 ✓ —— "暗置牌还是那张牌" ✓）；
+    //   服务端没给图（没权限 ✗）才画卡背 ✓。棋盘上仍然按 `面` 画卡背 ✓（这里只影响详情框 ✓）。
     + '<div class="dbox">' + (c.图 ? '<img src="' + c.图 + '" alt="' + esc(c.名称) + '">'
         : c.面 === '暗置' ? '<img src="/cards/背面.jpg" alt="暗置">'
         : '<span class="dim">（无卡图）</span>') + '</div>'
     + '<div class="dtext">' + esc(c.文字 || '（无规则文字）') + '</div>';
 }
-
+/** 只重画详情框（不重画整个界面）—— 悬停时每次都全画会卡 */
 function 刷新详情() {
   const el = document.getElementById('详情');
   if (el) el.innerHTML = 详情内容();
 }
 
+/** 卡池里的一张牌（图 + 左上角「当前这一组加了几张」角标） */
 function 图块(c, 本组计数) {
   return '<div class="poolitem" title="' + esc(c.名称) + '"'
     + ' onmouseenter="' + 内联('组牌悬停到', c.id) + '" onclick="' + 内联('组牌点选', c.id) + '">'
@@ -1241,16 +1809,23 @@ function 图块(c, 本组计数) {
     + '</div>';
 }
 
+/**
+ * **卡池 = 筛选 + 排序**，只有这一份（`组牌面板` 和 `刷新卡池` 都调它，别各写一份）。
+ *
+ * 排序：**先按所属系列，同系列再按卡牌编号**。
+ *   系列用 `localeCompare(…, 'zh')` —— 中文按拼音排（初阵 chū < 怒焰 nù）。
+ *   编号用 `numeric: true` —— 这样 '9' 排在 '10' 前面，补零的 '001' 也照样对。
+ */
 function 过筛排序卡池() {
   const f = 组牌筛选, p = 组牌;
   return p.卡池
     .filter((c) => {
       if (f.词 && (c.名称 + ' ' + (c.副类别 || []).join('') + ' ' + (c.类别 || []).join('')).indexOf(f.词) < 0) return false;
-
+      // 「无势力」= 中立（势力 为 null 或空数组）—— 它和「全部」是两回事，所以用单独的值
       if (f.势力 === '无势力') { if ((c.势力 || []).length) return false; }
       else if (f.势力 && (c.势力 || []).indexOf(f.势力) < 0) return false;
       if (f.类别 && (c.类别 || []).indexOf(f.类别) < 0) return false;
-      if (f.费用 !== '' && c.费用 !== Number(f.费用)) return false;
+      if (f.费用 !== '' && 费用数(c.费用) !== Number(f.费用)) return false;
       if (f.基本 === '基本' && !c.基本) return false;
       if (f.基本 === '非基本' && c.基本) return false;
       return true;
@@ -1259,7 +1834,10 @@ function 过筛排序卡池() {
       String(a.系列).localeCompare(String(b.系列), 'zh')
       || String(a.编号).localeCompare(String(b.编号), 'zh', { numeric: true }));
 }
-
+/**
+ * **卡池区**（标题行 + 图网格）——单独抽出来是为了「打字时只换这一块」。
+ * ⚠ 搜索框在**左栏**，不在这一块里；所以打字时它**根本不会被重建**，光标自然不丢。
+ */
 function 卡池区(过的, 侧, 可改, 本组计数) {
   return '<div class="zlabel" id="组牌卡池标">卡池——' + (可改 ? '点一下加进「' + 侧 + '」' : '只能看（这是对方那一组）')
     + '（<b id="组牌卡池数">' + 过的.length + '</b> 种）</div>'
@@ -1268,22 +1846,24 @@ function 卡池区(过的, 侧, 可改, 本组计数) {
     + '</div>';
 }
 
+/** 组牌面板：左边卡池（带筛选）+ 右边两副牌。整块都在这里渲染 */
 function 组牌面板() {
   const p = 组牌;
   const 计数 = (ids) => ids.reduce((m, id) => { m[id] = (m[id] || 0) + 1; return m; }, {});
   const 我位 = 状态 && 状态.我的座位 != null ? 状态.我的座位 : null;
-
+  /** 现在编辑的这一组能不能动 —— 单机两边都能；联机只能动自己那一组，切过去只能看 */
   const 能改 = (侧) => 我位 === null || (我位 === 0 ? 侧 === '甲' : 侧 === '乙');
-  const 侧 = p.侧;
+  const 侧 = p.侧;                       // **当前编辑的那一组**（不是「加给谁」）
   const 可改 = 能改(侧);
   const 找 = (id) => p.卡池.find((x) => x.id === id) || null;
 
   const f = 组牌筛选;
-  const 过的 = 过筛排序卡池();
-
+  const 过的 = 过筛排序卡池();   // 筛选 + 排序都在这一个函数里
+  /** **当前编辑这一组**里每张牌有几张（卡池图块左上角的角标）—— 不是双方的合计 */
   const 本组计数 = 计数(p[侧]);
   const 有筛选 = !!(f.词 || f.势力 || f.类别 || f.费用 !== '' || f.基本);
 
+  // ── 当前这一组的牌（缩略图；能改时点一下减一张）──
   const 本组 = () => {
     const m = 计数(p[侧]);
     const ids = Object.keys(m);
@@ -1302,6 +1882,7 @@ function 组牌面板() {
   const 校 = (t) => !t ? '' : (t.错误 || []).map((e) => '<div style="color:var(--bad)">✗ ' + esc(e) + '</div>').join('')
     + (t.警告 || []).map((e) => '<div class="dim">! ' + esc(e) + '</div>').join('');
 
+  // ── 左栏：标题 + 筛选 ──
   const 势力们 = ['魏', '蜀', '吴', '群', '汉', '无势力'];
   const 类别们 = ['单位', '锦囊', '阵略', '战器', '领土'];
   const 左 = '<div class="leftcol">'
@@ -1331,9 +1912,11 @@ function 组牌面板() {
     + (有筛选 ? '　<button class="次" style="padding:2px 6px" onclick="清筛选()">清筛选</button>' : '') + '</div>'
     + '</div></div>';
 
+  // ── 中栏：**只有当前编辑的那一组** + 卡池 ──
   const 中 = '<div class="deckmain">'
     + '<div class="deckwrap 单列"><div class="deckcol">'
-
+    // ⚠ 这里**不写「先手／后手」** —— 先后手是开局按 103.1 决定的（联机随机、
+    //   热座可点「甲先手／乙先手／随机」），和座位是甲还是乙没有关系。
     + '<b>' + 侧 + '</b> '
     + '<span class="dim">' + p[侧].length + ' 张' + (可改 ? '' : '　（只能看，不能改）') + '</span> '
     + (可改 ? '<button onclick="' + 内联('清空', 侧) + '">清空</button>'
@@ -1342,13 +1925,14 @@ function 组牌面板() {
     + 卡池区(过的, 侧, 可改, 本组计数)
     + '</div>';
 
+  // ── 右栏：切换 / 保存 + 详情 ──
   const 右 = '<div class="side">'
     + '<div class="topbar">'
-
+    // **导入 .cod** —— 本地读文件、本地解析成**和手动点选完全一样的卡号数组**，再走「保存牌组」那条路。
     + '<button onclick="document.getElementById(\'导入文件\').click()">导入 .cod</button>'
     + '<input id="导入文件" type="file" accept=".cod,.xml" style="display:none" onchange="导入套牌文件(this)">'
     + '<button onclick="切换组牌侧()">切换到 ' + (侧 === '甲' ? '乙' : '甲') + '</button>'
-
+    // 保存 = 保存**当前编辑的那一组**；不能改这一组时不给保存（联机切到对方就是这种情况）
     + (可改 ? '<button onclick="保存牌组()">保存牌组</button>'
             : '<button disabled title="这一组是对方的，只能看">保存牌组</button>')
     + '<button class="' + (组牌.无限制 ? 'on' : '') + '" onclick="切换无限制()"'
@@ -1359,23 +1943,30 @@ function 组牌面板() {
   return '<div class="wrap 组牌wrap">' + 左 + 中 + 右 + '</div>';
 }
 
+/** 鼠标移到卡池/牌组里的某张牌上 → 右栏显示它 */
 function 组牌悬停到(id) { 组牌选 = id; 刷新组牌详情(); }
-
+/** 组牌里点一张卡池的牌 → 右侧显示它的详情 */
 function 组牌点选(id) {
   组牌选 = id;
   const 我位 = 状态 && 状态.我的座位 != null ? 状态.我的座位 : null;
   const 侧 = 组牌.侧;
-
+  // 联机时切到对方那一组 → 只能看，不能加牌
   if (我位 === null || (我位 === 0 ? 侧 === '甲' : 侧 === '乙')) 加牌(id);
   else 刷新组牌详情();
 }
-
+/**
+ * 改一个筛选条件。
+ *
+ * ⚠ **打字（键 === '词'）时绝对不能整块重画** —— `render()` 会把 `#app` 的 innerHTML
+ * 整棵换掉，搜索框变成新节点、焦点丢掉，表现就是「打一个字母光标就跑了」。
+ * 所以打字只刷新**卡池那两块**（标题计数 + 图网格），搜索框那个节点从头到尾不被动。
+ */
 function 设筛选(键, 值) {
   组牌筛选[键] = 值;
   if (键 === '词' && 刷新卡池()) return;
   render();
 }
-
+/** 只刷新卡池区；成功返回 true（拿不到节点 = 还没画出来，交给调用方整画） */
 function 刷新卡池() {
   const 标 = document.getElementById('组牌卡池标'), 网 = document.getElementById('组牌卡池');
   if (!标 || !网) return false;
@@ -1391,9 +1982,10 @@ function 刷新卡池() {
                             : '<span class="dim">（没有符合筛选的牌）</span>';
   return true;
 }
-
+/** 清空组牌的筛选条件（词/势力/类别/费用/基本 全部归零） */
 function 清筛选() { 组牌筛选 = { 词: '', 势力: '', 类别: '', 费用: '', 基本: '' }; render(); }
 
+/** 右栏的详情：和游戏里的 详情内容() 同一套版式（.dhead/.dbox/.dtext） */
 function 组牌详情() {
   const c = 组牌 && 组牌选 ? 组牌.卡池.find((x) => x.id === 组牌选) : null;
   if (!c) return '<div class="dhead"><div class="dname">卡牌信息</div>'
@@ -1405,70 +1997,98 @@ function 组牌详情() {
   return '<div class="dhead"><div class="dname">' + esc(c.名称) + '</div>'
     + '<div class="dmeta">' + esc(类) + '　' + esc((c.势力 || []).join('/') || '中立')
     + (c.是单位 && c.武力 != null ? '　' + c.武力 + '/' + c.体力上限 : '')
-    + '　费用 ' + c.费用 + (需 ? '　需求 ' + 需 : '') + (供 ? '　提供 ' + 供 : '')
+    + '　费用 ' + 费用文字(c.费用) + (需 ? '　需求 ' + 需 : '') + (供 ? '　提供 ' + 供 : '')
     + '<br>' + esc(c.系列 + ' ' + c.编号) + (c.基本 ? '　【基本】' : '') + '</div></div>'
     + '<div class="dbox">' + (c.图 ? '<img src="' + c.图 + '" alt="' + esc(c.名称) + '">' : '<span class="dim">（无卡图）</span>') + '</div>'
     + '<div class="dtext">' + esc(c.文字 || '（无规则文字）') + '</div>';
 }
-
+/** 只重画组牌的详情框（不重画整个组牌面板） */
 function 刷新组牌详情() {
   const el = document.getElementById('组牌详情');
   if (el) el.innerHTML = 组牌详情();
 }
 
-let 视图 = [];
+/**
+ * **额外区域里同时开着的「区域视图」** ✓ —— 与主界面**逻辑上平级**（用户定的）：
+ *   · 可以同时开好几块（【回天术】的候选跨两个墓地 → 两个都得能看见 ✓）
+ *   · **谁也不会把谁顶掉** ✗ —— 这一步的【选】面板也在同一格里，两块各自滚动 ✓
+ *   · 开 / 关是**纯客户端视图状态** ✓（检视是**许可**、不是动作 → 不占时机、不进堆叠、不记日志 ✓）
+ *   · 隐藏区只画服务端给的（`可见登记` / 张数）✓；公开区画服务端发的（`卡()` 已按 `面` 扣掉牌面 ✓）
+ */
+let 视图 = [];                                   // [{ 区, 玩家 }]
 const 视图键 = (v) => v.区 + '|' + v.玩家;
-
+/** 打开一个区域视图（已经开着就不重复开 ✓） */
 function 开查看(区, 玩家) {
   const v = { 区, 玩家 };
   if (!视图.some((x) => 视图键(x) === 视图键(v))) 视图.push(v);
   render();
 }
-
+/** 关掉一个区域视图（按 `区|玩家` 键 ✓） */
 function 关视图(键) { 视图 = 视图.filter((v) => 视图键(v) !== 键); render(); }
 
+/** 预留：第二种战场布局（还没做）。按钮先留着。 */
 let 布局 = '平';
-
+/** 布局切换。**现在只有一种布局**，按钮留着占位（用户要求：删掉立体布局但保留按钮） */
 function 切布局() {}
 
+/** **一个区域视图**（看某个区域的全部牌：自己的手牌 / 墓地 / 放逐区 / 牌库张数 / 可见登记的牌）✓
+ *  ⚠ 它是**一块**（`.viewer`），由 `.viewers` 装好几块 ✓ —— 不再有「空占位」那套 ✗（块表的活 ✓）。 */
 function 区域视图html(s, v) {
-
+  // 「检视」= 效应登记给我的那些牌（g.可见登记 → s.可见登记）。服务端只发**我有权看的**，
+  //   所以在表里就是看得见，不需要再判一次座位。
+  //   这就是 401.5 / 103.6 / 031 黑水祭天模式 1 看到的牌 —— **复用查看器这一个界面**。
   const 是检视 = v.区 === '检视';
   const 名 = 是检视 ? '检视（效应让你看的牌）' : (v.区 === '放逐区' ? '放逐区' : s.players[v.玩家].名字 + ' 的' + v.区);
-
+  // ⚠ **检视容器画什么，也来自"当前这份需求"** ✓（不再读累积的 `可见登记` ✗）：
+  //   需求候选里服务端已经带了牌面（`c.卡` ✓）→ 这里直接拿它们画 ✓。
+  //   于是"残留 / 要清空 / 和面板不一致"这一整类问题消失 ✓（界面只反映当前这一步 ✓）。
   const 需求候选卡 = (() => {
     const 需0 = 当前需求();
-
+    // ⚠ **容器只画"查看内容"** ✓（服务器给的、只读 ✓）—— **不许退回槽候选** ✗：
+    //   槽候选是"要选的东西" ✓，里面可能是 `{键:'留在牌库顶'}` 这种**不是牌**的东西 ✓；
+    //   硬把它画成牌 = **空白卡** ✗，而它的字符串键还会进点击处理器 →
+    //   `ReferenceError: 置于牌库底 is not defined` ✓（2026-10 报的"确认后牌全空白 + 报错" ✓ 就是这个 ✓）。
+    //   ⚠ 而且**只有带 `卡`（真有牌面 ✓）的才画** ✓ —— 宁可少画，也不造假卡 ✗。
     return (((需0 && 需0.查看) || [])).filter((c) => c && c.卡).map((c) => c.卡);
   })();
   const 列表 = 是检视 ? 需求候选卡
     : v.区 === '墓地' ? s.players[v.玩家].墓地
     : v.区 === '放逐区' ? s.放逐区 : null;
   const 数 = 是检视 ? 需求候选卡.length : (v.区 === '牌库' ? s.players[v.玩家].牌库张数 : (列表 ? 列表.length : 0));
-
+  // 401.2/401.3：牌库不能主动查看，只能清点张数（张数已经画在牌库框上，这里不再是入口）
   const 注明 = 是检视 ? '401.5 / 检视效果：只有你看得到'
     : v.区 === '牌库' ? '401.2/401.3：不能主动查看，只能清点张数'
     : '公开区，任何时候都可以检视';
   let h = '<div class="viewer"><div class="vhead"><b>' + esc(名) + '</b>'
     + '<span class="dim">' + 数 + ' 张　' + 注明 + '</span><span class="spacer"></span>'
-
+    // 有候选时提示一句：这块视图现在是可以**选**的
     + (选择 && 选择.候选 && 选择.候选.size ? '<b>点一张计入选择</b>' : '')
     + '<button onclick="' + 内联('关视图', 视图键(v)) + '">关闭</button></div><div class="vgrid">';
   if (v.区 === '牌库') {
-
-    if (数 === 0) h += '<span class="dim">（空）</span>';
+    // 牌库整摞摆出来：**牌库顶在上**；服务端只给"能看的牌"发牌面（检视/观星登记过的），其余只带 uid → 画卡背
+    // 能不能看由服务端决定，客户端不判规则
+    // 服务端会发整摞 `牌库`（能看的带牌面）；万一没发（旧视图/测试局面）就按 `牌库张数` 画成背面
+  const 库 = s.players[v.玩家].牌库
+    || Array.from({ length: s.players[v.玩家].牌库张数 || 0 }, () => null);
+    if (!库.length) h += '<span class="dim">（空）</span>';
     else {
-      h += '<div class="vrowlabel">牌库共 ' + 数 + ' 张（背面：你看不到内容）</div>';
-      for (let k = 0; k < 数; k++) h += '<div class="cardback"></div>';
+      for (const c of 库) h += (c && c.名称) ? 卡牌(c, true, true) : '<div class="cardback"></div>';
     }
   } else if (!列表 || 列表.length === 0) h += '<span class="dim">（空）</span>';
-
+  // ⚠ **不要**传第三个参数「只悬停」—— 传了就只能看不能点；
+  //   不传的话 卡牌() 会按 任务.候选 判定它可不可点（点中即计入选择，走同一条 点选(键)）。
+  //   这就是「墓地里的牌要能被选中」那条：候选在隐藏区时，打开查看器在这里点 ✓
+  // ⚠ 可点**要靠调用方包一层** —— 卡牌() 自己只画「候选/选好」样式，不挂 onclick
+  //   （战场上、堆叠上都是这么做的）。包上之后点中即计入选择，走同一条 点选(键)。
   else h += 列表.map((c) => {
-
+    // ⚠ 两个细节：
+    //   ① 卡牌() 必须传「只悬停」—— 不传它自己会挂 onclick，点在里层，外层包的就接不到
+    //      （你点了没效果就是这个）；可点**由外面这层 span 负责**。
+    //   ② 正在选择时（任务有候选），不符合条件的牌要**压黑**且点不动。
     const 在选 = !!(选择 && 选择.候选 && 选择.候选.size);
     const 卡 = 卡牌(c, false, true);
     if (!在选) return 卡;
-    const 可 = 选能动(c.uid);
+    const 可 = 选能动(c.uid);   // ⚠ 只问【选】✓（`选择.候选` 就是这次的候选集合 ✓）
     if (!可) return '<span class="pickable 压黑">' + 卡 + '</span>';
     const 选 = 已挑(c.uid);
     return '<span class="pickable' + 框类(c.uid, true) + '"'
@@ -1477,22 +2097,47 @@ function 区域视图html(s, v) {
   return h + '</div></div>';
 }
 
+
+/**
+ * 103 开局的四步 —— **和回合用同一个请求通道**（`当前请求.决定.类型 === '开局'`）。
+ *
+ * ⚠ 以前开局是独立的一套：`开局操作条()` 按 `s.开局.阶段` 自己推算「该谁操作」，
+ *   和回合那套（`当前请求.玩家`）并存 —— 「该谁」漏判过三次。
+ *   现在「该谁」只有一处：`当前请求.玩家`（上面 操作条内容() 已经统一判过了）。
+ */
+/**
+ * **103 开局的四个面板 —— 按 `决定.类型` 分派**，和 弃牌/搜寻/宣告 那些一个路子。
+ *
+ * ⚠ 以前是「一个 `类型: '开局'` 总入口 + 内部再按 `决定.步骤` if 四次」：
+ *   那是**第二套步骤词表**（回合用 `请求.步骤` 装的是 准备/抓牌/行动/结束/弃牌，
+ *   开局又往同一个字段里塞 决定先手/调度宣告/调度执行/后看牌库顶）。
+ *   现在四个类型**和 `'弃牌'` / `'搜寻'` / `'宣告'` 平级** —— 一个类型一个面板，
+ *   客户端不再需要「这是不是开局」这种判断。
+ */
+// ⚠ **「开局四步」那套面板已删** ✗ —— 它以前是**第二套「按决定类型分派」的界面**：
+//   决定先手 / 调度宣告 / 调度执行 / 看牌库顶 各一个面板，各自的按钮还要自己拼字段名
+//   （`开局决定({先手:i})` / `{张数:k}` / `{接受:bool}` / `确认调度()`）✓。
+//   现在这四步都由 `需求面板()` 画 ✓：槽名、按钮文字、点完发什么，全部来自 `状态.决定需求` ✓。
+//   ⚠ 这是「客户端不翻译」的一部分 ✓：客户端里**不该再出现** `先手` / `张数` / `接受` 这些字段名 ✗。
+
+/* ── 联机大厅：两个座位都到齐才能开始 ───────────────────── */
 function 有人入座(s) { return (s.入座 || []).some((x) => x); }
-
+/** 还没入座 → 要不要显示大厅。组牌面板要**先判**（否则大厅恒为真，组牌永远出不来） */
 function 需要大厅(s) { return !令牌 || s.未入座 || s.废弃 || (!s.热座 && (!s.人齐 || !!s.等准备)); }
-
+/** 大厅：房间列表 + 建房/入座/热座。没入座时占据整个界面 */
 function 大厅(s) {
   const 入 = s.入座 || [null, null];
   let x = '<div class="大厅"><h1>阵面对决 · 测试台</h1>';
   if (s.废弃) {
-
+    // 有人在对局中离座 → 这局作废，不能让新人接手
     x += '<p><b style="color:#e0a070">这一局已经结束</b> —— 有玩家在对局中离开了。<br>'
       + '<span class="dim">本局不能继续，也不能让别人接手（否则新人会继承前一个人的手牌和场面）。</span></p>'
       + '<button onclick="离座()">离开并回到大厅</button></div>';
     return x;
   }
   if (令牌) {
-
+    // 已入座 → 等待页
+    // 掉线要看得出来
     x += '<p>' + 入.map((y, k) => '<span class="座' + (y ? ' 到' : '') + '">座位' + k + '：'
       + (y ? esc(y.名字) + (y.在线 ? '' : '（掉线）') : '等待中…') + '</span>').join('') + '</p>';
     const 对手掉线 = 入.some((y) => y && !y.在线);
@@ -1500,21 +2145,23 @@ function 大厅(s) {
       ? '<p><b style="color:#e0a070">对手掉线了</b> —— 他重开浏览器会自动回到这个座位；你也可以一直等。</p>'
         + '<button class="次" onclick="离座()">离座</button>'
       : '';
-
+    // **准备之前可以先组牌** —— 保存到房间，双方准备后发牌时用它
   x += '<p><button class="次" onclick="打开组牌()">组牌／换牌</button>'
     + '<span class="dim">—— 在准备之前改都来得及；保存后双方准备即生效</span></p>';
   x += (s.人齐 && s.等准备)
     ? '<p><button onclick="点了准备()">' + (状态.准备 && 状态.准备[状态.我的座位] ? '已准备（等对方）' : '我准备好了') + '</button>'
       + '<span class="dim">—— 双方都准备后随机决定先后手，然后开始</span></p>'
     : '';
-
+  // ⚠ 这里**不要**再放「进入对局」按钮：
+  //   双方都准备后服务端会把 等准备 变成 false，客户端自己就进战场了；
+  //   而这个按钮原来调的是 **热座()** —— 那会**另建一个热座房间**（换掉令牌、开一局新的），不是本意
   x += s.人齐
       ? '<p>房间 <b>' + esc(房间码) + '</b> —— 两位玩家都到齐了，各自点「我准备好了」就开始。</p>'
       : '<p>等待另一位玩家加入……<br>把这个地址发给对方：<br><b>' + location.origin + '/?房间=' + esc(房间码) + '</b></p>';
     x += '<button class="次" onclick="离座()">离座</button></div>';
     return x;
   }
-
+  // 未入座 → 房间列表，自己选进哪一间
   x += '<p><input id="入座名" placeholder="你的名字" maxlength="12">'
      + '<input id="入座令" placeholder="口令（没设就留空）"></p>';
   x += '<p><b>房间列表</b> —— 点「加入」进已有的一局</p>';
@@ -1533,9 +2180,9 @@ function 大厅(s) {
   return x + '</div>';
 }
 let 强制热座 = false;
-
+/** 进热座：建一个私人房间，一个人控制两边、看全部信息（本地测试用） */
 async function 热座() {
-
+  // 显式进入热座：建一个私人房间，一个人控制两边、看全部信息
   const 框 = document.getElementById('入座名');
   const 名 = (框 && 框.value) || '调试者';
   const r = await (await fetch('/api/入座', {
@@ -1544,7 +2191,8 @@ async function 热座() {
   })).json();
   if (!r.ok) { 提示(r.错误 || '进入热座失败'); return; }
   令牌 = r.令牌; localStorage.setItem('zmdj令牌', 令牌); 我 = null; 房间码 = r.房间 || '';
-
+  // ⚠ 必须重连推送 —— 连接里带着令牌，服务端才知道按哪个座位生成视图。
+  //   漏了这句的话，热座里还挂着「大厅订阅」，战场全靠 8 秒轮询（体感就是「操作后半天没反应」）。
   if (事件源) { 事件源.close(); 事件源 = null; }
   开推送();
   强制热座 = false;
@@ -1552,11 +2200,18 @@ async function 热座() {
   await 刷新();
 }
 
+/**
+ * **唯一的渲染入口** —— 整个界面都是「状态 + 会话」的纯函数。
+ * ⚠ 它里面**不能发请求、不能改状态**：改了会让这一帧画错（要改就排到微任务里，见 自动提交）。
+ * 每次重画前会 `记住滚动` / `恢复滚动`，并把上一次的状态串比一比决定要不要重画。
+ */
 function render() {
-  对齐选择状态();
-
+  对齐选择状态();   // ⚠ 每一帧先对齐：请求换了就把上一轮的选择整个丢掉（见它的说明）
+  // ⚠ 顺序要紧：组牌面板必须**先判**。
+  //   否则没入座时「需要大厅」恒为 true，组牌面板永远显示不出来（点了没反应）。
   if (组牌) {
-
+    // 兜底：组牌面板是**整棵重画**的（没有 data-块），所以焦点/滚动手动记住再恢复。
+    //   ⚠ 搜索框打字那条路**不走这里**（见 设筛选）—— 这是给「点筛选按钮／切组／存牌」那些整画用的。
     const 记的 = 记住滚动();
     document.getElementById('app').innerHTML = 组牌面板();
     恢复滚动(记的);
@@ -1567,22 +2222,39 @@ function render() {
   const s = 状态;
   const p = s.当前请求 ? s.当前请求.玩家 : null;
   可用牌 = new Set((s.合法动作 || []).filter((a) => a.uid != null).map((a) => a.uid));
-
-  任务 = 对齐会话(s);
-
+  // 统一选择模型：先算出「现在要选什么」，再决定谁高亮
+  任务 = 对齐会话(s);   // 顺带把「这一步的已选」对齐（键变了就重来）
+  // 701.17 搜寻：要选牌就得有界面。
+  //   ⚠ 这里曾经写死成 `null` —— 于是**搜寻面板永远不显示**，韩浩的死去触发看起来「没反应」。
+  //   ⚠ 传的是**服务端的原始决定**（`当前请求.决定`），不是 `当前任务()` 那个对象：
+  //     后者把类型改成了 '搜寻'+区域，字段也叫 需/说明/全部，和 搜寻面板() 要的
+  //     数量/标签/候选 对不上。
+  // ⚠ 【搜寻/检视】**走统一的【选】** ✓：把要看的牌放进**额外面板** ✓（面板不是区域 ✗，
+  //   谁调用它、往里放什么 ✓）→ 它就成了【选】的来源之一 ✓；用途 = 交回服务端 ✓（统一分发 ✓）。
   {
     const d0 = s.当前请求 && s.当前请求.决定;
     const 决定键 = '搜寻|' + (s.当前请求?.玩家) + '|' + (d0?.标签 || '');
-
+    // ⚠ 守卫看「**现在有没有【选】**」✓，不是「以前开过没」✗：
+    //   以前只看 会话.搜寻键 ✗ → 选择被清掉（键变了/动作成功）后就**再也不会重建** ✗
+    //   → 检视面板消失、什么都看不到 ✓（2026-02 报的 ✓）。
     if (d0 && d0.类型 === '搜寻') {
-
+      // ⚠ **不再自动开一块「检视」区域视图** ✗→✓（用户定的口径）：
+      //   · **要你选的东西一律在需求面板里表达** ✓ —— 面板现在能按区域分组画牌子 ✓
+      //     （候选带 `区` ✓、没名字的画「背面」✓），所以不需要"替玩家开块容器" ✗；
+      //   · **查看是随时能开的自由界面** ✓（墓地在规则上任何时候都能看 ✓）——
+      //     它只由玩家自己点开 ✓，**不受"现在轮到谁选"影响** ✓。
+      //   想让玩家看到检视到的牌 → 面板上给一个「检视（N 张）」入口按钮 ✓（见 需求面板 ✓）。
       会话.搜寻键 = 决定键;
     }
     if (!d0 || d0.类型 !== '搜寻') 会话.搜寻键 = null;
   }
-
+  // ③ **任务也走【选】** ✓：有任务而没【选】时开一个（候选 = 槽表并集 ✓；用途 = 按槽分流写 宣告选 ✓）
+  // ⚠ **服务端下发的决定需求（L2）→ 一律交给选择系统** ✓（客户端不自己拼选择 ✗）。
+  //   包括开局那几步（103.4 调度执行 ✓ —— 它本身就是一次选择 ✓）。
   {
-
+    // ⚠ **字段在顶层** ✗ —— 服务端把它放在 `状态.决定需求` ✓（server.ts:600 的视图顶层 ✓），
+    //   不是 `当前请求.需求` ✗。以前读错路径 → 恒为 undefined ✓ → 选择系统从未建起来 ✓
+    //   → 调度时点手牌毫无反应 ✓（2026-02 报的 ✓）。
     const 需0 = s.决定需求;
     if (需0 && 需0.槽 && 需0.槽.length && !选择) {
       const 并0 = new Set();
@@ -1595,16 +2267,20 @@ function render() {
   }
 
   if (任务 && !选择) {
-
+    // ⚠ **候选并集要从「任务的需求」来** ✓ —— 薄任务（施放/启动/转移/战斗）**只带 `需求`** ✗，
+    //   没有任何 `候选支付/候选阵地/任务.槽表` 那种老字段 ✓；以前这里先算 `建槽表()` 的并集、
+    //   并集空就**不开始选** ✗ → 动作类的【选】根本没建起来 → 目标/阵地/支付源全点不了 ✗
+    //   （客户端冒烟抓到的 ✓：施放发出去的包里只剩 uid ✗）。
     const 需0 = 任务.需求;
-
+    // ⚠ 槽表只放**会随玩家操作变的值** ✓ —— 说明性的东西（`呈现` / 候选的显示名 / 点完发什么）
+    //   一律留在**需求**里 ✓（面板读需求 ✓）；同一个事实存两份就是补丁山的开头 ✗。
     const 槽表给 = ((需0 && 需0.槽) || []).map((z) => ({
       名: z.名, 需: z.需, 候选: new Set(槽键(z)), 条件: z.条件, 量: 槽量表(z),
     }));
     const 并集 = new Set();
     for (const z of 槽表给) for (const k of z.候选) 并集.add(k);
     const 表 = 建槽表();
-
+    // ⚠ 没有需求的任务（老路）才用客户端自己拼的那份 ✓
     if (!槽表给.length) {
       槽表给.push(...表.map((z) => ({ 名: z.名, 需: z.需, 候选: z.候选 })));
       for (const z of 表) for (const k of z.候选) 并集.add(k);
@@ -1612,20 +2288,34 @@ function render() {
     const 上限 = 槽表给.reduce((n, z) => n + z.需.最大, 0);
     if (并集.size) 开始选({ 名字: 任务.说明 || '', 源: 选源.战场, 候选: 并集, 槽表: 槽表给,
       数量: { 最小: 0, 最大: 上限 }, 可放弃: false, 已选: [...new Set(表.flatMap((z) => z.已选))],
-
+      // ⚠ **不再有「用途」把 B 抄进 宣告选** ✗ —— C 只在确认时取 B 的结果发 A ✓
       用途: null });
   }
 
+
+  // ⚠ `搜寻决` 那个变量已删 ✗ —— 它当年给「不许你在检视时打开查看器」那条补丁用 ✓；
+  //   现在检视就是一块区域视图、确认只有一个家，没有需要它判的东西了 ✓。
+  // 103.4 调度执行：**只有正在调度的那个人**的选牌作数。
+  //   ⚠ 这个 Set 以前从不清空 —— 先手选完 3 张轮到后手时，先手的 uid 还留在里面：
+  //     后手会看到「已选 3/4」和那 3 张高亮，而且那 3 张不在自己手牌里**点不掉**
+  //     （选牌() 只在手牌里才处理）；凑够 N 张就"确认成功"，不报错。
+  //   ⚠ 更糟的是 nextUid 每局从 1 重数 —— 新开一局时残留 uid 会**撞上新牌**，
+  //     于是「新开一局自动选好了上一局那几张」。
+  // ── 顶栏拆成**左右两半**，分别塞进左栏和右栏的顶部 ──
+//   这样中间的战场（board）能从**最顶上**开始，多出一整条顶栏的高度。
+//   中间不放假内容，只留视觉上的空。
 const 顶栏左 = '<div class="topbar"><b>阵面对决</b>'
     + '<span>第 ' + s.turn + ' 回合</span>'
     + (s.开局 && s.turn === 0 ? '<span class="dim">先手：' + esc(s.players[s.先手玩家].名字) + '</span>' : '')
-
+    // 「进行到哪一步」就是 请求.步骤 —— 不再有第二套阶段名
     + '<span>' + (p === null ? (s.开局 && s.当前请求 ? '开局中：' + esc(s.当前请求.步骤) : '—') : '当前：' + esc(s.players[p].名字)) + '</span>'
     + '</div>';
 const 顶栏右 = '<div class="topbar">'
     + '<span class="dim">' + esc(s.players[0].名字) + ' ' + s.players[0].体力 + '/' + s.players[0].体力上限 + '　'
     + esc(s.players[1].名字) + ' ' + s.players[1].体力 + '/' + s.players[1].体力上限 + '</span>'
-
+    
+      // 按你要求：AI 功能已经删掉 —— 这两个按钮**保留原样**（样式/名字/开关状态都照旧 ✓），
+      //   只是**没有 onclick**（按了不做任何事 ✓，不会再开 AI 代理 ✓）。
       + '<button class="' + (s.AI代理 && s.AI代理[0] ? 'on' : '') + '"'
       + ' title="' + esc(s.players[0].名字) + ' AI（AI 功能已移除）">'
       + esc(s.players[0].名字) + ' AI</button>'
@@ -1636,42 +2326,54 @@ const 顶栏右 = '<div class="topbar">'
     + '<button onclick="切布局()">布局</button>'
     + '<button onclick="新局()">新开一局</button><button onclick="打开组牌()">组牌／换牌</button></div>';
 let h = '';
-
+  // ── 大区块**分开算**，每块带 data-块 ──
+  //   这样 render() 能逐块比对，只替换变了的那些：
+  //   没变的节点原地不动 → 卡图不会重新取（不闪）、滚动不动、CSS 过渡不被打断。
   const 左栏html = '<div class="leftcol" data-块="左栏">' + 顶栏左
     + '<div class="sharedbox" onclick="开查看(\'放逐区\',-1)" title="400：放逐区由所有玩家共享；406.3 明置且任何人都能检视">'
     + '<span class="dim">放逐区</span><b>' + s.放逐张数 + '</b></div>'
     + 堆叠行(s)
     + '</div>';
-
+  // 自己的座位永远显示在下面（热座时按座位 0 算）
   const 我的位 = s.我的座位 == null ? 0 : s.我的座位;
   const 对位 = (我的位 + 1) % s.players.length;
   const 对手html = 半场(s, 对位, '对手');
   const 我方html = 半场(s, 我的位, '我方');
-
+  // ⚠ 有【选】在跑 → **只用它的额外面板** ✓（不再另外画一套 ✗）
+  // ⚠ **不再二选一** ✗ —— 额外区域与主界面**逻辑上平级**（用户定的）：
+  //   这一步的【选】面板（如果有）与玩家打开的区域视图（可以多个）**同时**都在 ✓，
+  //   谁也不替换谁 ✓（以前是 `选择 ? 面板 : 查看器` → 选择时墓地打不开 ✗ 2026-02 报的 ✓）。
+  //   放哪由屏幕决定：现在都装在同一格里，纵向排、各自滚动 ✓。
+  // ⚠ **不做任何自动开 / 自动关** ✗（用户 2026-10 定的 ✓）：
+  //   查看容器只有「查看（N 张）」按钮这一个入口 ✓，收起靠容器自己的「关闭」✓ —— 界面不再自作主张 ✓。
   const 视图们 = (视图 || []).map((v) => 区域视图html(s, v)).join('');
   const 查看html = 视图们
     ? '<div class="viewers" data-块="查看器">' + 视图们 + '</div>'
     : '<div data-块="查看器" style="display:none"></div>';
-
+  // ⚠ 战场拆成「板 + 查看器」两块 —— 查看器在对战里开关很频繁，
+  //   不拆的话每次开关都会**连累两个半场重建**（卡图闪、滚动丢）。
   const 板html = '<div class="board' + (任务 ? ' 选择中' : '') + '" data-块="战场">' + 对手html + 我方html + '</div>';
   const 查看html块 = 查看html;
   const 右栏html = '<div class="side" data-块="右栏">' + 顶栏右
     + '<div class="detail" id="详情">' + 详情内容() + '</div>'
-
+    // ⚠ 日志框**先画空** —— 内容由 同步日志() 只追加新行（见它的说明）。
+    //   写在这里的话，每次渲染都要 join + esc **整条**日志，日志一长就越打越卡。
     + '<div class="logbox" id="日志"></div></div>';
-
+  // ⚠ 半场那两块**没有外层包裹**（它们就是 .board 的直接孩子，grid 靠这个），
+  //   所以它们用 outerHTML 逐块替换 —— 见 铺区块()。
   const 块 = [
     { 名: '左栏', html: 左栏html },
     { 名: '战场', html: 板html, 子: [{ 名: '对手半场', html: 对手html }, { 名: '我方半场', html: 我方html }] },
     { 名: '查看器', html: 查看html块 },
     { 名: '右栏', html: 右栏html },
   ];
-
+  // ── 重画等于把 #app 整个换掉，滚动位置/焦点/文本选择都会丢 ──
+  //   所以：画之前把各容器的滚动位置记下来，画完原样恢复。
   const 记的滚动 = 记住滚动();
   const 日志原本贴底 = (() => { const x = document.getElementById('日志'); return !x || x.scrollTop + x.clientHeight >= x.scrollHeight - 4; })();
   if (!铺区块(块)) {
     document.getElementById('app').innerHTML = '<div class="wrap">' + 块.map((b) => b.html).join('') + '</div>';
-
+    // 首次整棵重建 —— 把每块的 html 记到节点上，下次才能只替换变了的
     const wrap0 = document.querySelector('#app > .wrap');
     if (wrap0) for (const b of 块) {
       const el = wrap0.querySelector('[data-块="' + b.名 + '"]'); if (el) el.__html = b.html;
@@ -1679,20 +2381,48 @@ let h = '';
     }
   }
   恢复滚动(记的滚动);
-
+  // 日志：只追加新行（**原本就贴着底才跟着滚**，否则你往上翻的时候会被轮询拽回去）
   同步日志(s.log, 日志原本贴底, s.log总数);
+  // ⚠ 这里**不再有自动开/关** ✓（已全部删除 ✗）。  上次状态串 = 状态串(s);
+  // ⚠ **「按可见登记条数自动弹查看器」那一整套已删** ✗ —— 它当年就是「未知原因的检视界面」的来源 ✓
+  //   （`可见登记` 是权限表：只增不减、搜寻一次登记几十张 → 条数 1→42→41→42 跳 → 条数回升就乱弹 ✗）。
+  //   检视现在由**当前请求**表达（`决定.类型 === '搜寻'` → 上面那条桥直接**开一块「检视」视图** ✓）：
+  //   一张操作一张界面 ✓，不需要任何「猜什么时候该弹」的规则 ✗。
+  // ⚠ **删掉「检视不是给我的 → 自动关掉检视那块」** ✗→✓ ——
+  //   查看是**玩家自己的**界面状态 ✓：不该被"现在轮到谁"左右 ✓（用户定：查看与选择分开 ✓）。
+  //   要关就由玩家自己点关闭 ✓。（当年之所以要自动关，是因为选择**靠**这块容器表达 ✗ —— 那条已经拆了 ✓。）
 
 }
 
+/**
+ * **日志只追加**。
+ *
+ * 每帧都把 `s.log.join('\n')` 整条 esc 一遍再换掉整块 innerHTML，成本是 O(总行数)，
+ * 而日志只增不减 —— 越打越卡就是这么来的。这里改成：
+ *   · 行数变多 → 只把**新增的那几行** append 进去
+ *   · 行数变少（新开一局 / 换房间）→ 整块重建
+ *   · 没变 → 什么都不做，只按需贴底
+ *
+ * ⚠ 「日志框是空的」也要整块重建：右栏那块被替换时（详情变了），日志框会是新的空节点，
+ *   这时候如果只 append，前面的历史就丢了。
+ */
+/**
+ * **日志只追加**（按**绝对行号**追加 ✓）。
+ *
+ * ⚠ 不能拿"这一窗的行数"当进度 ✗ —— 服务端发的是 `log.slice(-100)` ✓，
+ *   窗口满了以后长度**恒为 100** ✗ → "有新行"永远判成"没有" ✗
+ *   → 表现就是「刚放下的单位没有日志 ✓，等下一次右栏重建才一起冒出来」✓（2026-10 报的 ✓）。
+ *   所以服务端另给 `log总数` ✓，这里只比**绝对序号** ✓。
+ */
 let 上次日志到 = -1;
 function 同步日志(行, 原本贴底, 总数) {
   const el = document.getElementById('日志');
   if (!el) { 上次日志到 = -1; return; }
-  const 起始 = Math.max(0, (typeof 总数 === 'number' ? 总数 : 行.length) - 行.length);
+  const 起始 = Math.max(0, (typeof 总数 === 'number' ? 总数 : 行.length) - 行.length);   // 本窗第一行的绝对序号
   const 末尾 = 起始 + 行.length;
   const 空白 = el.innerHTML === '';
   if (空白 || 上次日志到 < 起始 || 上次日志到 > 末尾) {
-
+    // 节点被换掉了（空白 ✓）、或者服务端从头来过 / 窗口滑动得我们接不上 ✗ → 整块重建
     el.innerHTML = esc(行.join('\n'));
     上次日志到 = 末尾;
     if (原本贴底 || 空白) el.scrollTop = el.scrollHeight;
@@ -1705,8 +2435,13 @@ function 同步日志(行, 原本贴底, 总数) {
   if (原本贴底) el.scrollTop = el.scrollHeight;
 }
 
+/* ── 重画时的滚动/焦点保护 ────────────────────────────────────
+   轮询每 1.2 秒会重画一次；不保护的话，滚动条、输入焦点、文本选择全会被重置。 */
 const 可滚动选择器 = ['.logbox', '.zone .row', '.leftcol .stackrow .row', '.vgrid', '.opbar', '.deckcol', '.deckgrid', '.poolgrid', '.prewrap'];
-
+/* ── 滚轮 = 横向滚动 ──────────────────────────────────────────
+   「一行不换行」的区域（手牌 / 领土 / 战场·阵略战器）只在横向溢出，所以滚轮直接左右移。
+   ⚠ `passive:false` 不能省：不写的话 preventDefault 无效，滚轮会把整个页面也跟着滚。
+   ⚠ 只在**真的溢出**时才拦 —— 没溢出还拦着，页面就滚不动了。 */
 document.addEventListener('wheel', (e) => {
   const el = e.target && e.target.closest && e.target.closest('.zone .row');
   if (!el || el.scrollWidth <= el.clientWidth) return;
@@ -1714,15 +2449,29 @@ document.addEventListener('wheel', (e) => {
   el.scrollLeft += (e.deltaY || e.deltaX);
 }, { passive: false });
 
+/* ── 手机适配：**原样横屏**（只等比缩小，不重排）──────────────────────
+   设计宽度 1280 ✓；窗口更窄就整体 `zoom` 缩放（桌面上 = 1 ✓ 完全不变 ✓）。
+   竖屏时给一块提示让玩家转屏 ✓（这块布局是宽版 ✓，竖屏缩下去没法看 ✗）。 */
 const 设计宽 = 1280;
 function 适配屏幕() {
-
+  // ⚠ 防御：测试桩/残缺环境里没有 window.innerWidth 或 body.classList ✗ →
+  //   适配是**锦上添花** ✓，绝不能因此让整个脚本挂掉 ✗（客户端 harness 就在这种环境里跑 ✓）。
   if (!document.body || !document.body.classList || !document.body.style ||
       typeof window.innerWidth !== 'number' || typeof window.innerHeight !== 'number') return;
   const 横 = window.innerWidth > window.innerHeight;
-
+  /**
+   * ⚠ **只在横屏缩放** ✗→✓ —— 用户实测：竖屏时 `390/1280 ≈ 0.3` ✓，
+   *   所有按钮被缩到 **10px 上下** → "**好像没法点击**" ✗（不是坏了，是点不中 ✓）。
+   * 所以：**竖屏 = 不缩**（正常大小、能点 ✓）+ 铺一层"请横屏"提示 ✓；
+   *        **横屏 = 等比缩到刚好放下** ✓（844/1280 ≈ 0.66 ✓，按钮 ≈ 26px ✓ 手点得动 ✓）。
+   */
   const 缩 = 横 ? Math.min(1, Math.max(320, window.innerWidth) / 设计宽) : 1;
-
+  /**
+   * ⚠ `zoom` 会把**高度也一起缩** ✗ —— 而 `#app` 写的是 `100vh` ✓ →
+   *   缩 0.66 之后布局只占屏幕 **66% 高** ✗（下面一大片空 ✓），
+   *   而版式本来就是按"满屏高"排的 ✓ → 内容挤在一起、还会重叠 ✗（用户截的就是这样 ✓）。
+   * 所以要把高度**按同样倍数撑回去** ✓：`#app` 用 `calc(100vh / var(--缩放))` ✓。
+   */
   document.documentElement.style.setProperty('--缩放', String(缩));
   document.body.style.zoom = 缩 === 1 ? '' : String(缩);
   document.body.classList.toggle('竖屏', !横);
@@ -1731,21 +2480,30 @@ window.addEventListener('resize', 适配屏幕);
 window.addEventListener('orientationchange', () => setTimeout(适配屏幕, 120));
 适配屏幕();
 
+/**
+ * **局部更新**：逐块比对，只替换变了的那块。
+ *
+ * 以前是 `#app.innerHTML = h` —— **整棵重建**，代价：
+ *   卡图重新取（闪）、滚动归零、输入焦点丢、CSS 过渡被打断、hover 丢、整树重排。
+ * 现在没变的节点**原地不动**，那些问题自然都没了。
+ *
+ * 返回 false = 结构对不上（首次渲染 / 从大厅切进来 / 块数变了）→ 调用方整棵重建。
+ */
 function 铺区块(块) {
   const app = document.getElementById('app');
   const wrap = app && app.firstElementChild;
   if (!wrap || !wrap.classList.contains('wrap')) return false;
-
+  // 大区块：按 data-块 找，替换 outerHTML
   for (const b of 块) {
     const el = wrap.querySelector(':scope > [data-块="' + b.名 + '"]');
-    if (!el) return false;
+    if (!el) return false;                       // 结构变了 → 让调用方重建
     if (el.__html !== b.html) {
       el.outerHTML = b.html;
-
+      // ⚠ outerHTML 替换后拿到的是新节点，缓存标记要重新挂
       const 新 = wrap.querySelector(':scope > [data-块="' + b.名 + '"]');
       if (新) 新.__html = b.html;
     }
-
+    // 子块（半场）：它们在 .board 里，没有自己的外层包裹 → 也用 data-块 找
     for (const 子 of (b.子 || [])) {
       const 子el = wrap.querySelector('[data-块="' + 子.名 + '"]');
       if (!子el) return false;
@@ -1759,6 +2517,7 @@ function 铺区块(块) {
   return true;
 }
 
+/** 重画前记下各个滚动容器的位置 —— 不记的话每 8 秒轮询会把滚动条拽回顶部 */
 function 记住滚动() {
   const 记的 = [];
   for (const sel of 可滚动选择器) {
@@ -1768,7 +2527,7 @@ function 记住滚动() {
   return { 滚动: 记的, 焦点: ae && ae.id ? ae.id : null,
            选择: (ae && ae.selectionStart != null) ? [ae.selectionStart, ae.selectionEnd] : null };
 }
-
+/** 重画后把滚动位置放回去（配对 记住滚动） */
 function 恢复滚动(记的) {
   if (!记的) return;
   for (const [sel, i, sl, st] of 记的.滚动) {
@@ -1781,16 +2540,19 @@ function 恢复滚动(记的) {
   }
 }
 
+/** 服务端状态的指纹 —— 没变就不用重画（重画会丢滚动位置和焦点）*/
 let 上次状态串 = null;
-
+/** 状态指纹：字段没变就不重画。⚠ 用的字段名必须和 server.ts 发的完全一致，写错就是 undefined */
 function 状态串(s) {
-
+  // ⚠ 字段名必须和 server.ts 发的**完全一致** —— 写错的话这里是 undefined，
+  //   比较会永远「没变」→ 画面再也不刷新。改服务端字段时这里要跟着改。
   return JSON.stringify([
     s.turn, s.over, s.winner, s.开局, s.当前请求, s.合法动作, s.可见登记, s.AI代理, s.可支付来源,
-
+    // ⚠ 准备相关的字段也要算进指纹 —— 不然「乙点了准备」不会触发重画，
+    //   甲那边就一直停在「等对方」，而且点了准备会先闪一下（本地状态和服务端状态对不上）
     s.准备, s.都准备, s.等准备, s.人齐, s.已开始,
     s.放逐区, s.放逐张数, s.stack,
-
+    // 日志只比长度：比内容便宜，而新增日志一定会改变长度
     (s.log || []).length,
     s.players.map((p) => [
       p.体力, p.体力上限, p.支持, p.本回合已打领土,
@@ -1799,46 +2561,70 @@ function 状态串(s) {
   ]);
 }
 
+/** 弹一条红字提示（错误/失败），几秒后自己消失 */
 function 提示(文) {
   const d = document.getElementById('错误');
   d.textContent = 文; d.style.display = 'block';
   setTimeout(() => { d.style.display = 'none'; }, 3500);
 }
 
-let 可用牌 = new Set();
+// ⚠ `let 查看 = null;` 已删 ✗ —— 单值的「当前查看器」换成了 `视图[]`（见 开查看 那一段 ✓）：
+//   单值就是「一次只能看一个区域、而且要和选择面板二选一」的来源 ✓。
+/** 上一次看到的「可见登记」条数 —— 变多了就自动弹查看器（检视是一次性信息，不弹就没人注意到） */
+// ⚠ 初值是 **-1（未知）**，不是 0 —— 见下面那段判断的说明。
 
+let 可用牌 = new Set();     // 当前玩家现在能用的牌（优先权高亮用）
+
+/* ── 联机：座位令牌 / 轮询 ──────────────────────────────────
+   不带令牌 = 热座（上帝视角，调试用）；带了令牌只看得到自己那份。
+   客户端全程用相对地址，所以本地 / 局域网 / 公网都不用改代码。 */
 let 房间码 = (new URLSearchParams(location.search).get('房间') || '').toUpperCase();
-
+/** 按地址栏的 `?房间=` 预填房间码 */
 function 设房间码(v) { 房间码 = (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); }
 
-let 我 = null;
+let 我 = null;                       // 我的座位号
 let 入座中 = false;
 const 带令 = (u) => 令牌 ? u + (u.indexOf('?') >= 0 ? '&' : '?') + '令牌=' + encodeURIComponent(令牌) : u;
+// （令牌 / 带令牌 已挪到脚本顶部 —— 见那里的注释）
 
+
+
+/** 点一张牌：有选择任务就在任务里选它，否则只是看详情 */
 function 选牌(uid) {
-
+  // ②-3：有【选】在跑 → 查看器里点牌也交给它 ✓
   if (选择) { if (选点(uid)) render(); return; }
-
+  // 有选择任务时，点牌 = 在该任务里选中/取消（统一模型）
   if (任务) { 点选(uid); return; }
-
+  // （发起战斗的攻击对象走 任务 的【选】，不在这里特判 —— 只有一条路。）
+  // 103.4 调度执行：从手牌点选 N 张（已选状态就是那份 选择，见 选择键/对齐选择）
   const d0 = 状态 && 状态.当前请求 && 状态.当前请求.决定;
   if (d0 && d0.类型 === '调度执行') {
     const p = 状态.当前请求.玩家;
-
+    // 只点得动**自己手牌**里的牌 —— 这样即使已选里混进了别人的 uid 也进不来
+    // ⚠ 字段名是 `hand` ✓（状态里的名字 ✓）—— 以前写成 `手牌` ✗ → 条件恒假 ✓
+    //   而且这一版**已经**为它开了【选】✓（见「决定需求 → 交给选择系统」那条 ✓）
+    //   → 点击一律走 选点 ✓（选点只认候选 ✓，别人的 uid 自然进不来 ✓）。
     if (选择 && 选点(uid)) render();
     return;
   }
   选中 = (选中 === uid ? null : uid); 待选 = null; 会话.模式 = null; render();
 }
-
+/** 宣告时选模式。⚠ 模式是**上堆叠时就定**的（700.2b），所以这时堆叠是空的 */
 function 选模式(i) { 会话.模式 = i; render(); }
+// ⚠ `决定(接受)` / `选选项(键)` 两个 helper 已删 ✗ —— 它们只服务「选项 / 可选触发」那两条
+//   客户端自画按钮的分支 ✓；现在这两类决定都走 `需求面板()`（候选带 `发`：true/false 或选项键 ✓）。
 
+/** 把 已选目标 组装成 宣告 动作。⚠ 字段是 目标名 —— 引擎要的就是它（以前这里发 slot，发错了）*/
 function 组装宣告(d, 规格) {
   const 目标 = [];
   for (const sp of 规格 || []) {
-
+    // ⚠ **两处都要读** ✗ —— 同一个「已选」在这里有两种落点：
+    //   · 施放那条路（槽表）直接写 `宣告选[目标名]` ✓
+    //   · **结算时选目标**（触发式能力的待定目标 ✓）走 点选 → 写的是 `本槽()` = 宣告选[任务.步] ✗
+    //   只读前者的话，后者永远组装出空目标 ✓ → 引擎「移动：找不到目标」✗（009 后备虎骑 那次 ✓）。
+    //   多余的键由下面的 `sp.候选.find` 过滤掉 ✓，所以合并是安全的 ✓。
     for (const uid of [...new Set([...(宣告选[sp.目标名] || [] || []), ...(选择 ? 已选全() : [])])]) {
-
+      // ⚠ 键可能是玩家（'玩家N'）—— 玩家没有 uid
       if (typeof uid === 'string' && uid.startsWith('玩家')) {
         目标.push({ 目标名: sp.目标名, 类型: '玩家', 玩家: Number(uid.slice(2)) }); continue;
       }
@@ -1849,6 +2635,7 @@ function 组装宣告(d, 规格) {
   return { 种类: '宣告', 模式: d.模式候选 ? 会话.模式 : undefined, 目标 };
 }
 
+/** 宣告面板的确认：把模式和每槽目标发出去 */
 function 确认宣告() {
   const d = 状态.当前请求.决定;
   const 规格 = d.模式候选
@@ -1858,31 +2645,47 @@ function 确认宣告() {
   宣告选 = {};
 }
 
+/** 发一个动作给服务器，拿回新状态并重画。**所有玩家操作的唯一出口**（别处直接 fetch 会漏掉错误提示） */
 async function 动作(体) {
   const r = await (await fetch('/api/action', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(带令牌(体)),
   })).json();
   if (r.状态) 状态 = r.状态;
   待选 = null; 会话.模式 = null;
-
-  选中 = null; 悬停 = null;
-
+  // ⚠ **动作做完就把「点选」清掉** —— 这是所有动作的共同出口（让过 / 施放 / 转移 / 启动能力 / 发起战斗）。
+  //   不清的话，点了「让过」之后棋盘上那张牌还亮着、详情框还停在它上面 ——
+  //   看起来像「还选着它」，但优先权已经交出去了。
+  //   注意：这里**不动 `会话`** —— 多步的施放向导要在这一步之后继续读 宣告选。
+  选中 = null; 悬停 = null;   // 只清「点选」—— 会话留给多步施放向导
+  // ⚠ **动作成功 = 这一次选择结束了** ✓ → 清掉【选】✓
+  //   不清的话：施放/决定成功后，阵地/领土的**实线框与已选**会留在界面上 ✗
+  //   （施放完成后**请求键没变** ✓ → `对齐选择状态()` 不会清它 ✗ → 看着像「还选着」✓ 2026-02 报的 ✓）
+  //   失败时**保留** ✓ —— 玩家通常只需改一个选择再确认 ✓。
   if (r.ok) 选择 = null;
   if (!r.ok) 提示(r.错误 || '这个动作不合法');
   render();
 }
 
+/** 点合法动作列表里的第 idx 项。按动作种类分派：能直接做完的就发请求，要选目标的先建任务 */
 function 点动作(idx) {
   const a = 状态.合法动作[idx];
   if (!a) return;
-
+  // ⚠ **开始一个新动作 = 会话重来**。
+  //   不清的话，上一张牌挑的**阵地**和**支付源**还留在 宣告选 里，于是下一张牌：
+  //     · `当前任务` 的阵地那支看到「槽里已经有阵地了」→ 跳过；
+  //     · 支付那支看到「已经够付了」→ 也跳过；
+  //   → 一个任务都算不出来，界面就退化成旧兜底（下拉框）。
+  //   表现就是**第一张正常、后面都不正常**。
+  //   这里只可能在没有任务时才被点到（有任务时渲染的是任务面板，不是这张按钮表），所以清得安全。
   清掉选择();
-
+  // ⚠ **零选择的动作**（让过 / 打领土…）不走面板 —— 直接照**服务端的模板**发 ✓
+  //   （客户端不再拼 `种类` / `uid` / `面` 这些字段名 ✗：模板里 `种类` 是字面量、`uid`/`面` 是 `@字段` ✓）
   if (!(a.需求 && (a.需求.槽 || []).length)) {
     const 发 = 填模板(a.需求, a);
     if (发) return 动作(发);
   }
-
+  // ⚠ 转移 / 启动能力 / 施放 都是同一件事：**把这条动作挂起来，界面由它的需求画** ✓
+  //   （阵地高亮/点选、目标、支付源、启动费用，全在 `待选.动作.需求` 的槽里 ✓）
   if (a.种类 === '转移' || a.种类 === '启动能力' || a.种类 === '发起战斗' || a.种类 === '施放') {
     待选 = { 动作: a };
     选中 = null;
@@ -1890,14 +2693,15 @@ function 点动作(idx) {
   }
 }
 
-async function 新局() {
 
+async function 新局() {
+  // 必须带令牌：新开一局是「在**当前房间**里重开」，服务端按令牌找房间
   const r = await (await fetch('/api/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(带令牌({})) })).json();
   if (!r || !r.players) { 提示((r && r.错误) || '新开一局失败'); return; }
   状态 = r;
   选中 = null; 待选 = null; 悬停 = null; 会话.模式 = null; 宣告选 = {}; render();
 }
-
+/** 打开组牌面板（顺便拉一次卡池） */
 async function 打开组牌() {
   const r = await (await fetch('/api/pool' + (令牌 ? '?令牌=' + encodeURIComponent(令牌) : ''))).json();
   组牌 = r.池;
@@ -1905,19 +2709,19 @@ async function 打开组牌() {
   组牌.侧 = (状态 && 状态.我的座位 === 1) ? '乙' : '甲'; 组牌.校验甲 = 组牌.校验甲 || { 错误: [], 警告: [] }; 组牌.校验乙 = 组牌.校验乙 || { 错误: [], 警告: [] };
   组牌.无限制 = !!r.池.无限制; 选中 = null; 待选 = null; render();
 }
-
+/** 切到另一组牌（联机时切过去只能看，见 组牌面板 的 可改） */
 function 切换组牌侧() { 组牌.侧 = 组牌.侧 === '甲' ? '乙' : '甲'; 组牌选 = null; render(); }
-
+/** 测试用：无限制组牌。**保存时才发给服务端** —— 服务端校验用的是它存的值。 */
 function 切换无限制() { 组牌.无限制 = !组牌.无限制; render(); }
-
+/** 组牌：往某一侧加一张（够 3 张就不再加，100.2a） */
 function 加牌(id) { 组牌[组牌.侧].push(id); render(); }
-
+/** 组牌：从某一侧去掉一张 */
 function 减牌(侧, id) { const i = 组牌[侧].indexOf(id); if (i >= 0) 组牌[侧].splice(i, 1); render(); }
-
+/** 组牌：清空某一侧 */
 function 清空(s) { 组牌[s] = []; render(); }
-
+/** 保存牌组到**当前房间**。不重开对局 —— 点「新开一局」才应用。 */
 async function 保存牌组() {
-
+  // **只保存当前编辑的那一组** —— 服务端只动这一组，别的一组原样不动。
   const 侧 = 组牌.侧;
   const r = await (await fetch('/api/decks', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1930,11 +2734,11 @@ async function 保存牌组() {
 }
 
 let 房间列表 = [];
-
+/** 拉房间列表（SSE 大厅推送来了也会调它） */
 async function 载入房间列表() {
   try { const r = await (await fetch('/api/房间')).json(); 房间列表 = r.房间 || []; } catch {}
 }
-
+/** 联机开局前的一步：双方都点了准备才发牌开局（服务端判断） */
 async function 点了准备() {
   const r = await (await fetch('/api/准备', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1945,6 +2749,7 @@ async function 点了准备() {
   render();
 }
 
+/** 坐到某个房间的某个座位（名字取输入框） */
 async function 入座到(房间号) {
   const 名 = (document.getElementById('入座名') || {}).value || '';
   const 令 = (document.getElementById('入座令') || {}).value || '';
@@ -1956,20 +2761,29 @@ async function 入座到(房间号) {
   入座中 = false;
   if (!r.ok) { 提示(r.错误 || '入座失败'); return; }
   令牌 = r.令牌; localStorage.setItem('zmdj令牌', 令牌); 我 = r.座位; 房间码 = r.房间 || '';
-
+  // 换了身份要**重连**：连接里带着令牌，服务端才知道该按哪个座位生成视图。
+  //   ⚠ 只 close 不重开的话，入座后还挂着「大厅订阅」→ 收不到对局推送 → 只能等轮询
   if (事件源) { 事件源.close(); 事件源 = null; }
   开推送();
   提示(null);
   await 刷新();
 }
-
+/**
+ * **导入 .cod**（Cockatrice 牌组）：本地读、本地解析 —— 解析出来的就是**卡号数组**，
+ *   和玩家在卡池里一张张点出来的**完全同一种东西**，所以后面直接复用「保存牌组」。
+ *
+ * 卡号 = 「系列-编号」，而 .cod 里写的是 `[初阵·031]无懈可击` —— 把 `·` 换成 `-` 就对上了，
+ *   不必查名字（名字只用来在认不出时报给人看）。
+ *
+ * ⚠ **备牌（side）直接忽略**：现在只玩主牌，备牌留到有换备规则时再说（认不出的牌会列出来，不静默丢）。
+ */
 async function 导入套牌文件(inp) {
   const f = inp.files && inp.files[0];
-  inp.value = '';
+  inp.value = '';                       // 同一个文件能再导一次
   if (!f || !组牌) return;
   let 文本 = '';
   try { 文本 = await f.text(); } catch (err) { 提示('读文件失败：' + err.message); return; }
-
+  // 只认 <zone name="main"> 那一段（备牌不要）
   const 主区 = (文本.match(/<zone name="main">([\s\S]*?)<\/zone>/) || [])[1] ?? 文本;
   const 有 = new Set(组牌.卡池.map((c) => c.id));
   const ids = []; const 缺 = [];
@@ -1989,29 +2803,32 @@ async function 导入套牌文件(inp) {
   await 保存牌组();
 }
 
+/** 组牌入口：没入座就先自动进热座，再打开组牌面板（测试用，不要求先开会话） */
 async function 去组牌() {
   if (!令牌) await 热座();
   if (!令牌) return;
   await 打开组牌();
 }
 
+/** 离开座位。⚠ 对局中要确认，并说清后果（座位会被释放、对手看到你掉线） */
 async function 离座() {
-
+  // 对局中退出要确认，并说清后果
   const 开局了 = 状态 && 状态.turn > 0;
   if (开局了 && !confirm('对局进行中。离座后这个座位会被释放，对手会看到你掉线。\n确定要离座吗？')) return;
   await fetch('/api/离座', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ 令牌 }) });
   令牌 = ''; localStorage.removeItem('zmdj令牌'); 我 = null;
   if (事件源) { 事件源.close(); 事件源 = null; }
-  开推送();
+  开推送();      // 切回「大厅订阅」—— 不然离座后收不到房间列表的推送
   await 刷新();
 }
-
+/** SSE 连接：连上后服务端每次「推进」停下都会推一份状态过来 */
 let 事件源 = null;
 let 推送状态 = '未连';
-let 推送收到 = 0;
-
+let 推送收到 = 0;      // 收到过多少条推送（用来判断「已连但没推」还是「根本没连」）
+/** 开 SSE。⚠ **没令牌也要连** —— 那是「大厅订阅」，收房间列表用的 */
 function 开推送() {
-
+  // ⚠ **没令牌也要连** —— 那是「大厅订阅」，收房间列表用。
+  //   不连的话，别人建了新房你得等轮询（8 秒）才看得到。
   if (事件源) return;
   try {
     事件源 = new EventSource('/api/events' + (令牌 ? '?令牌=' + encodeURIComponent(令牌) : ''));
@@ -2019,25 +2836,31 @@ function 开推送() {
     事件源.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
-
+        // 大厅订阅的推送：只有房间列表，没有对局状态
         推送收到++;
         if (d.大厅) { 房间列表 = d.房间 || []; render(); return; }
         状态 = d;
         我 = 状态.我的座位;
         if (!待选 && !会话.模式) render();
-      } catch {  }
+      } catch { /* 忽略坏消息 */ }
     };
-
-    事件源.onerror = () => { 推送状态 = '断开'; 上次状态串 = null; render(); };
+    // 断了 EventSource 自己会重连（浏览器自带），这里不用管
+    事件源.onerror = () => { 推送状态 = '断开'; 上次状态串 = null; render(); };   // 重连后强制对齐一次
   } catch { 事件源 = null; }
 }
 
+/**
+ * **从服务器拉一次状态**。SSE 推送是主通道，这个是**兜底**（8 秒一次，外加回到前台时补一次）。
+ * ⚠ 后台标签页里浏览器会节流定时器，所以「在不在线」不能只看这个请求的间隔 —— 见 server.ts 的 在线()。
+ */
 async function 刷新() {
   try {
     状态 = await (await fetch(带令('/api/state'))).json();
     我 = 状态.我的座位;
     if (!令牌 || !状态.人齐) await 载入房间列表();
-
+    // 正在选目标 / 宣告模式时不要打断
+    // 状态没变就**不重画** —— 重画会把滚动条和输入焦点重置掉。
+    //   （如果这期间客户端自己改过东西，那些操作都直接调过 render()，所以跳过后画面仍是最新的）
     const 变了 = 状态串(状态) !== 上次状态串;
     if (变了 && !待选 && !会话.模式) render();
   } catch {}
@@ -2050,13 +2873,15 @@ async function 刷新() {
     await 载入房间列表();
     render();
     if (decodeURIComponent(location.search).indexOf('组牌') >= 0) await 打开组牌();
-
+    // ?查看=放逐区 / ?查看=墓地:0 / ?查看=牌库:1 —— 直接打开区域视图（便于深链和自动化）
     const 查 = new URLSearchParams(location.search).get('查看');
     if (查) { const [区, 位] = 查.split(':'); 开查看(区, 位 == null ? -1 : Number(位)); }
-
+    // **SSE：服务端主动推** —— 端1 动作后，服务端直接把新状态推给端2，不用等轮询。
+    //   轮询留着当**兜底**（推送断了照样能跑），但间隔放宽到 8 秒。
     开推送();
     setInterval(刷新, 8000);
-
+// 后台标签页里浏览器会节流定时器（轮询最慢约 60 秒一次）。回到前台立刻补一次，
+//   不用干等下一个周期 —— 顺便让「掉线」标记及时消掉。
 document.addEventListener('visibilitychange', () => { if (!document.hidden) 刷新(); });
   } catch (e) {
     document.getElementById('app').innerHTML = '<pre style="color:#e07070">载入失败：' + e
