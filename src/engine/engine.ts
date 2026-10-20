@@ -6,8 +6,8 @@
 import type { 事件名,
   CardDef, 阵地, Support, SupportMap, ResolveStep, Condition, Value,
   TargetSpec, Selector, TriggeredAbility, ActivatedAbility, ModeSpec, StaticAbility, RecipientRef, ReplacementSpec,
-  指示物定义, 筛选, 规则限制, 自身限制, 费用修正,
-  筛选属性, 筛选条件, Ability, 关键词能力 , 玩家动作, 玩家指向, Trigger } from './types.js';
+  指示物定义, 筛选, 规则限制, 自身限制, 费用修正, 费用行为,
+  筛选属性, 筛选条件, Ability, 关键词能力 , 玩家动作, 玩家指向, Trigger, 阵地目的地 } from './types.js';
 import { 阵地顺序 } from './types.js';
 import type { GameState, Obj, PlayerState, StackItem, TempEffect, Zone } from './state.js';
 import { 势力支持度, 造对象, 相对阵地, 相邻阵地, 斜对阵地, 盖时间印记, 盖时间印记翻面, 盖章,
@@ -25,6 +25,30 @@ export const 手牌上限 = 7;
  * **514.1 的弃牌步骤用的手牌上限** —— 基础 7，再叠加场上所有
  * 「手牌上限修正」（604 改变规则的持续性效应，例如 038 臧霸）。
  */
+/**
+ * **514 弃牌步骤**：手牌超过上限就要弃（弃哪几张由该玩家选）。
+ * 抽成独立的生成器是为了**可测**，也让「弃牌」这件事只有一个入口（记事件 + 派发触发）。
+ */
+export function* 弃牌到上限G(g: GameState, p: number): Generator<请求, void, Action | null> {
+  const pl = g.players[p]!;
+  const 上限 = 手牌上限为(g, p);
+  while (pl.hand.length > 上限) {
+    const 需弃 = pl.hand.length - 上限;
+    const 答 = yield {
+      玩家: p, 时机: { 允许打领土: false, 允许通常时机: false }, 步骤: '弃牌步骤',
+      决定: { 类型: '弃牌', 需弃, 标签: '手牌上限 ' + 上限 + '，请选 ' + 需弃 + ' 张弃掉' },
+    };
+    const 选 = (答 && 答.种类 === '决定' && Array.isArray(答.弃牌)) ? 答.弃牌 : [];
+    const 有效 = 选.filter((uid) => pl.hand.some((c) => c.uid === uid)).slice(0, 需弃);
+    if (有效.length === 0) {
+      const 弃 = pl.hand[pl.hand.length - 1]!;          // 没给选择就兜底，避免卡死
+      走弃牌操作(g, p, [弃], '（手牌上限 ' + 上限 + '，自动）');
+      continue;
+    }
+    走弃牌操作(g, p, 有效.map((uid) => pl.hand.find((c) => c.uid === uid)!).filter(Boolean), '（手牌上限 ' + 上限 + '）');
+  }
+}
+
 export function 手牌上限为(g: GameState, p: number): number {
   let n = 手牌上限;
   for (const o of g.战场) {
@@ -78,14 +102,14 @@ export type Action =
   /** 702.16 转移：特殊动作，把单位移到相邻空阵地 */
   | { 种类: '转移'; card: Obj; 到: 阵地; 路径?: '转移' | '许可' }
   /** 108.3a：费用带 {X} 时，X 由操控者在打出时选择并宣告 */
-  | { 种类: '施放'; card: Obj; 目标: 目标[]; 阵地?: 阵地; 模式号?: number; X?: number; 支付源?: number[] ; 额外牺牲?: number[] }
+  | { 种类: '施放'; card: Obj; 目标: 目标[]; 阵地?: 阵地; 模式号?: number; X?: number; 支付源?: number[]; 额外?: { 操作: string; uid?: number }[]; 额外牺牲?: number[] }
   | { 种类: '发起战斗'; card: Obj; 目标: 攻击对象; /** 120 长江天险：进攻方自己选的支付源 ✓ */ 支付源?: number[] }
   // 602.1d：「→」前的弃牌/牺牲也是启动费用 —— 由玩家挑（和施放的支付源同一套槽）
-  | { 种类: '启动能力'; card: Obj; 能力索引: number; 费用步进?: { 偏移: number; 步进: number }; 目标?: 目标[]; 支付源?: number[]; 模式号?: number; 费用弃牌?: number[]; 费用牺牲?: number[]; 费用弃牌数?: number; 费用牺牲数?: number; 费用X?: boolean; 宣告X?: number }   // 108.3a：费用里带 {X} 时，启动的玩家宣告的 X
+  | { 种类: '启动能力'; card: Obj; 能力索引: number; 费用步进?: { 偏移: number; 步进: number }; 目标?: 目标[]; 支付源?: number[]; 模式号?: number; 费用弃牌?: number[]; 费用牺牲?: number[]; 费用横置?: number[]; 宣告X?: number }
   | { 种类: '宣告'; 模式?: number; 目标: { 目标名: string; 类型: '实体' | '玩家'; uid?: number; 玩家?: number }[] }
   // 弃牌/搜寻/开局：要选的牌 uid（选）；开局还用它带 先手 / 张数
   // ⚠ `选` 不只是 uid —— 选项类（'接受'）、阵地名（'左边路'）都是字符串（见 应用选择）
-  | { 种类: '决定'; 接受: boolean; 弃牌?: number[]; 选?: (number | string)[]; 先手?: number; 张数?: number }
+  | { 种类: '决定'; 接受: boolean; 弃牌?: number[]; 选?: (number | string)[] }
   | { 种类: '让过' };
 
 /** 策略：给定局面返回一个动作，或 null 表示让过 */
@@ -200,11 +224,13 @@ export function 执行调度(g: GameState, p: number, uids: number[]): boolean {
     暂放.push(c);
   }
   // 103.5：要调度的牌先放到一边（放逐区当暂存），抓回等量后再洗回牌库
-  for (const c of 暂放) 移到区域(g, c, '放逐区');
+  // 103.5：要调度的牌**面朝下**放到一边（放逐区当暂存；`暗置` = 对面看不到牌面）
+  for (const c of 暂放) { 移到区域(g, c, '放逐区'); 设面(g, c, '暗置', p); }
   抓牌(g, p, o.起手牌数 - pl.hand.length, true);
-  for (const c of 暂放) 移到区域(g, c, '牌库');
+  // 洗入牌库前把"面朝下"恢复（牌库里的牌再抓到手上时不该还带着暗置）
+  for (const c of 暂放) { 设面(g, c, '明置', p); 移到区域(g, c, '牌库'); }
   pl.library = 洗牌(pl.library, g.随机源);                    // 洗入牌库
-  记录(g, pl.name + ' 调度 ' + n + ' 张，抓回 ' + o.起手牌数 + ' 张后洗回牌库');
+  记录(g, pl.name + ' 调度 ' + n + ' 张（面朝下放到一边），抓 ' + n + ' 张把手牌补回 ' + o.起手牌数 + '，再把那 ' + n + ' 张洗回牌库');
   o.已执行[p] = true;
   return true;
 }
@@ -257,20 +283,6 @@ export function 登记检视(g: GameState, 玩家: number, o: Obj): void {
 }
 
 /**
- * 103.6：**后手决定**其牌库顶牌的去向（留在牌库顶 / 置于牌库底）。
- * ⚠ 这里**不做检视** —— 检视是通用的 检视 操作（见 登记检视），103.6 只是「看过之后做个决定」。
- *   以前这个函数叫 后手看牌库顶、并把牌塞进 开局.顶牌 —— 那是**另一套可见性机制**，已删。
- */
-export function 后手决定顶牌去向(g: GameState, 保留: boolean): boolean {
-  const o = g.开局;
-  if (!o) return false;
-  const 后 = (g.先手玩家 + 1) % g.players.length;
-  const pl = g.players[后]!;
-  const 顶 = pl.library[pl.library.length - 1];
-  if (顶 && !保留) { pl.library.pop(); pl.library.unshift(顶); }
-  记录(g, '103.6：' + pl.name + (保留 ? ' 将牌库顶牌留在牌库顶' : ' 将牌库顶牌置于牌库底'));
-  return true;
-}
 
 /** 把开局流程直接走完（AI / 批量对局）：发牌 + 记「都宣告 0 张」，然后丢掉开局状态 */
 export function 开局直接完成(g: GameState): void {
@@ -392,9 +404,22 @@ export function 词值(g: GameState, o: Obj, 名称: string): number {
   // 印制和层6 授予现在是**同一种形状**（`{ 名称, 数值? }`，见 关键词能力条目），
   //   所以这里只看名字对不对得上、数值有没有给。
   for (const k of 有效特征(g, o).关键词) {
-    if (k.名称 === 名称) return k.数值 ?? 0;
+    if (k.名称 !== 名称) continue;
+    return typeof k.数值 === 'number' ? k.数值 : (k.数值 !== undefined ? 取值(g, o.操控者, k.数值 as Value, o) : 0);
   }
   return 0;
+}
+
+/**
+ * **同名关键词的数值合计** —— 只给「多个分别生效、效果可合并」的那一类用（702.6d 坚韧）。
+ *
+ * ⚠ 不要拿它替换 `词值`：射击/迎击这种关键词是**各自独立的能力**（多个射击 = 多个启动式），
+ *   不是数值相加；`词值` 回答「这条关键词的数值是多少」，这里回答「同名条目加起来是多少」。
+ */
+export function 词值合计(g: GameState, o: Obj, 名称: string): number {
+  let 和 = 0;
+  for (const k of 有效特征(g, o).关键词) if (k.名称 === 名称) 和 += typeof k.数值 === 'number' ? k.数值 : (k.数值 !== undefined ? 取值(g, o.操控者, k.数值 as Value, o) : 0);
+  return 和;
 }
 
 export function 带词(g: GameState, o: Obj, 名称: string): boolean {
@@ -455,9 +480,26 @@ export function 是类别(g: GameState, o: Obj, 类别: string): boolean {
  *   ⚠ 只看**印制**的能力（这是印在牌上的静止式，不是层 6 授予的关键词）。
  */
 /** 146 盲兵：「…若能发起战斗则必须发起战斗」—— 和 自身限制 相反的那一类静止式 */
+/**
+ * 这张牌**自己身上的静止式**有没有授予某个关键词（109「只要你操控主公单位，此令符便具有伏击」）：
+ * 手牌/堆叠里的牌不会被 收集候选（只扫战场）算进特征，所以这条在判定前单独查一遍。
+ */
+export function 自我授予关键词(g: GameState, o: Obj, 名: string): boolean {
+  for (const ab of (o.def.能力?.能力 ?? []) as StaticAbility[]) {
+    if (ab.种类 !== '静止式' || !ab.连续) continue;
+    const 授予 = (ab.连续.层.获得关键词 ?? []).some((k) => k.名称 === 名);
+    if (!授予) continue;
+    if (!ab.连续.条件) return true;
+    if (判断(g, 有效控制器(g, o), ab.连续.条件 as Condition, o)) return true;
+  }
+  return false;
+}
+
 export function 有必须发起战斗(g: GameState, o: Obj): boolean {
   if (o.面 === '暗置') return false;                       // 709.2a：暗置没有规则叙述
-  return ((o.def.能力?.能力 ?? []) as StaticAbility[]).some((ab) => ab.必须发起战斗 === true);
+  if (((o.def.能力?.能力 ?? []) as StaticAbility[]).some((ab) => ab.必须发起战斗 === true)) return true;
+  // 096：层6 授予的（持续效应，实时）
+  return 有效特征(g, o).必须发起战斗 === true;
 }
 export function 有自身限制(g: GameState, o: Obj, 哪种: 自身限制): boolean {
   if (o.面 === '暗置') return false;
@@ -721,6 +763,16 @@ function 本回合用过的能力(o: Obj, 回合: number): number[] {
   return m && m.回合 === 回合 ? m.索引 : [];
 }
 
+/** 本回合已经触发过的触发式能力索引（005 司马懿「每回合第一次」） */
+function 本回合触发过的能力(o: Obj, 回合: number): number[] {
+  const m = o.记忆['本回合已触发能力'] as { 回合: number; 索引: number[] } | undefined;
+  return m && m.回合 === 回合 ? m.索引 : [];
+}
+function 记一次触发(g: GameState, o: Obj, 索引: number): void {
+  const 已 = 本回合触发过的能力(o, g.turn);
+  写记忆(g, o, '本回合已触发能力', { 回合: g.turn, 索引: [...已, 索引] });
+}
+
 /**
  * **702.16「转移」关键词本身**能不能用。
  * ⚠ 这是**印在牌上的那个关键词能力**，不是效应授予的移动许可 —— 两者是两种不同的能力，
@@ -782,6 +834,9 @@ export function 转移(g: GameState, p: number, o: Obj, 到: 阵地, 路径: '�
   // 记**这条路**的次数 —— 两种能力各自每回合一次，互不影响（见 能移动许可 的说明）
   写记忆(g, o, 路径 === '许可' ? '本回合已移动许可' : '本回合已转移', g.turn);
   记录(g, o.def.全名 + (路径 === '许可' ? ' 移动（116.2c 许可）：' : ' 转移（702.16）：') + 到);
+  // 702.12c / 701.18：转移也是「移动」—— 记事件并派发移动触发（突击就挂在这上面）
+  记事件(g, '移动', { 受方: o.uid });
+  排队移动触发(g, o);
 }
 
 /**
@@ -810,7 +865,11 @@ export function 能打出领土(g: GameState, p: number, o: Obj, 面: '明置' |
 
 export function 能施放(g: GameState, p: number, o: Obj): { ok: boolean; reason?: string } {
   const 通常时机 = 处于通常时机(g, p);
-  if (o.区域 !== '手牌') return { ok: false, reason: '不在手牌' };
+  // 「本回合中，你可以打出该牌」：在放逐区、且本回合被授权过
+  if (o.区域 === '放逐区') {
+    const 可 = (g.本回合可打出 ?? []).some((x) => x.uid === o.uid && x.回合 === g.turn);
+    if (!可) return { ok: false, reason: '不在手牌' };
+  } else if (o.区域 !== '手牌') return { ok: false, reason: '不在手牌' };
   // 613.10 + 302.1：该玩家被禁止「打出非领土牌」（能施放 处理的就是非领土牌；领土走 能打出领土）
   if (玩家被禁(g, p, '打出牌', o)) return { ok: false, reason: '本回合不能打出这张牌（613.10）' };
   if (o.def.类别.includes('领土')) return { ok: false, reason: '领土走特殊动作' };
@@ -834,7 +893,7 @@ export function 能施放(g: GameState, p: number, o: Obj): { ok: boolean; reaso
     return false;
   };
   const 瞬发 = ((o.def.类别 ?? []).includes('锦囊') && (o.def.超类别 ?? []).includes('瞬发'))
-    || 有词(g, o, '伏击') || 有许可('伏击');
+    || 有词(g, o, '伏击') || 自我授予关键词(g, o, '伏击') || 有许可('伏击');
   if (!瞬发 && !通常时机) return { ok: false, reason: '需要通常时机' };
   if (!满足势力需求(g, p, o.def.势力需求)) return { ok: false, reason: '势力需求不足' };
   return { ok: true };
@@ -873,24 +932,92 @@ export function 打出领土(g: GameState, p: number, o: Obj, 面: '明置' | '�
  * ⚠ 引擎**没有自动支付**：`支付源` 必须由调用方给出（界面让玩家点地，AI 自己挑）。
  */
 
-export function 施放(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: 阵地, 模式号?: number, X?: number, 支付源?: number[], 额外牺牲?: number[]): void {
+export function 施放(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: 阵地, 模式号?: number, X?: number, 支付源?: number[],
+  /** 601.2f 的额外费用选择：每项 = { 操作, uid }（支付/体力/自身体力 不需要选，不出现） */
+  额外?: { 操作: string; uid?: number }[],
+  /** 旧字段（109 舍生取义）：等价于 额外 里的一条 { 操作:'牺牲', uid } */
+  额外牺牲?: number[]): void {
   const pl = g.players[p]!;
   // 108.3a：费用带 X 时，X 由操控者在打出时选择并宣告；这里把它当费用来支付
   const 宣告X = 牌面费用值(o.def.打出费用) === 'X' ? Math.max(0, Math.floor(X ?? 0)) : 0;
   // 604：含 费用修正（【李典】那种加价）
-  const 总费用 = 牌面费用值(o.def.打出费用) === 'X' ? 宣告X : 实际打出费用(g, p, o.def);
+  let 总费用 = 牌面费用值(o.def.打出费用) === 'X' ? 宣告X : 实际打出费用(g, p, o.def);
+  // 601.2f：**打出的额外费用是通用行为列表**（支付 / 弃牌 / 牺牲 / 横置 / 体力 / 自身体力）。
+  //   额外的「支付」不需要玩家另挑地 —— 并进 总费用 一起付（同一批 支付源 只能扣一次）。
+  const 额外费们 = (o.def.额外费用 ?? []) as 费用行为[];
+  for (const f2 of 额外费们) if (f2.操作 === '支付') 总费用 += 费用点数值(f2.点数, 宣告X);
   if (!支付数字费用(g, p, 总费用, 支付源)) { 记录(g, '支付失败：' + o.def.全名); return; }
-  // 打出时的**额外费用**（109 舍生取义）：牺牲一个由你操控的单位。602.1d 同一个道理，结算前付掉。
+  // 034：用掉一条「下一张」减费（打出即消耗）
+  {
+    const i = (g.临时费用修正 ?? []).findIndex((r) => r.玩家 === p
+      && (!r.筛选 || 符合筛选(g, o, r.筛选)));
+    if (i >= 0) { 记录(g, '减费生效：' + o.def.全名 + ' 少付 ' + g.临时费用修正![i]!.减 + ' 点（034）'); g.临时费用修正!.splice(i, 1); }
+  }
+  // 601.2f：其余额外费用逐条付；任何一条付不出 → 整张牌打出失败（601.2c）
+  const 额外选 = [...(额外 ?? []), ...((额外牺牲 ?? []).map((uid) => ({ 操作: '牺牲', uid })))];
+  const 取选 = (操作: string) => 额外选.filter((x) => x.操作 === 操作).map((x) => x.uid)
+    .filter((u): u is number => typeof u === 'number');
   let 牺牲的: Obj | undefined;
-  const 额外牺牲费 = 取费用行为(o.def.额外费用, '牺牲');
-  if (额外牺牲费) {
-    const 选 = (额外牺牲 ?? []).map((uid) => g.战场.find((x) => x.uid === uid))
-      .filter((x): x is Obj => !!x && 有效控制器(g, x) === p && (!额外牺牲费.筛选 || 符合筛选(g, x, 额外牺牲费.筛选)));
-    if (选.length < 额外牺牲费.数量.最小) { 记录(g, o.def.全名 + '：额外费用（牺牲）付不出，打出失败'); return; }
-    const 祭品 = 选[0]!;
-    牺牲的 = 祭品;
-    牺牲(g, 祭品);
-    记录(g, g.players[p]!.name + ' 为 ' + o.def.全名 + ' 额外牺牲了 ' + 祭品.def.全名 + '（打出费用，602.1d）');
+  let 放逐的: Obj | undefined;
+  for (const f2 of 额外费们) {
+    switch (f2.操作) {
+      case '支付':
+        break;
+      case '放逐': {
+        const 池 = f2.从 === '手牌' ? pl.hand : pl.graveyard;
+        const 选 = 取选('放逐').map((u) => 池.find((c) => c.uid === u && c !== o))
+          .filter((c): c is Obj => !!c && (!f2.筛选 || 符合筛选(g, c, f2.筛选)));
+        if (选.length < f2.数量.最小) { 记录(g, o.def.全名 + '：额外费用（放逐 ' + f2.数量.最小 + ' 张）付不出，打出失败'); return; }
+        放逐的 = 选[0]!;
+        移到区域(g, 放逐的, '放逐区');
+        记录(g, pl.name + ' 为 ' + o.def.全名 + ' 额外放逐了 ' + 放逐的.def.全名 + '（打出费用，601.2f）');
+        break;
+      }
+      case '弃牌': {
+        const 手 = pl.hand;
+        const 牌 = 取选('弃牌').map((u) => 手.find((c) => c.uid === u && c !== o))
+          .filter((c): c is Obj => !!c && (!f2.筛选 || 符合筛选(g, c, f2.筛选)));
+        if (牌.length < f2.数量.最小) { 记录(g, o.def.全名 + '：额外费用（弃牌 ' + f2.数量.最小 + ' 张）付不出，打出失败'); return; }
+        走弃牌操作(g, p, 牌.slice(0, f2.数量.最小), '（打出费用，601.2f）');
+        break;
+      }
+      case '牺牲': {
+        const 选 = 取选('牺牲').map((u) => g.战场.find((x) => x.uid === u))
+          .filter((x): x is Obj => !!x && 有效控制器(g, x) === p && (!f2.筛选 || 符合筛选(g, x, f2.筛选)));
+        if (选.length < f2.数量.最小) { 记录(g, o.def.全名 + '：额外费用（牺牲）付不出，打出失败'); return; }
+        const 祭品 = 选[0]!;
+        牺牲的 = 祭品;
+        牺牲(g, 祭品);
+        记录(g, pl.name + ' 为 ' + o.def.全名 + ' 额外牺牲了 ' + 祭品.def.全名 + '（打出费用，601.2f）');
+        break;
+      }
+      case '横置': {
+        if (f2.目标 === '自身') { 写横置(g, o, true); break; }
+        const 选 = 取选('横置').map((u) => g.战场.find((x) => x.uid === u))
+          .filter((x): x is Obj => !!x && x !== o && 有效控制器(g, x) === p && !x.tapped
+            && (!f2.筛选 || 符合筛选(g, x, f2.筛选)));
+        if (选.length < f2.数量.最小) { 记录(g, o.def.全名 + '：额外费用（横置 ' + f2.数量.最小 + ' 个）付不出，打出失败'); return; }
+        for (const x of 选.slice(0, f2.数量.最小)) {
+          写横置(g, x, true);
+          记录(g, pl.name + ' 为 ' + o.def.全名 + ' 额外横置了 ' + x.def.全名 + '（打出费用，601.2f）');
+        }
+        break;
+      }
+      case '体力': {
+        if (pl.体力 < f2.点数) { 记录(g, o.def.全名 + '：额外费用（' + f2.点数 + ' 点体力）付不出，打出失败'); return; }
+        pl.体力 -= f2.点数;
+        记录(g, pl.name + ' 为 ' + o.def.全名 + ' 额外支付了 ' + f2.点数 + ' 点体力（打出费用，601.2f）');
+        break;
+      }
+      case '自身体力': {
+        写伤害(g, o, o.damage + f2.点数);
+        记录(g, o.def.全名 + ' 为打出的额外费用受到 ' + f2.点数 + ' 点伤害（601.2f）');
+        break;
+      }
+      default:
+        记录(g, o.def.全名 + '：额外费用包含不支持的「' + String(f2.操作) + '」，打出失败');
+        return;
+    }
   }
   // （从手牌摘除由 进战场 → 从当前区域摘除 负责，这里不用手写 splice）
   const 目标槽: Record<string, 目标> = {};
@@ -903,6 +1030,7 @@ export function 施放(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地
     来源: null, card: o, 目标, 目标槽, chosenSlot: 阵地, chosenMode: 模式号,
     宣告X,                                   // 108.3a：堆叠上的 X 等于宣告的数值
     额外牺牲: 牺牲的,                          // 601.2f：效应里的 { ref:'额外牺牲' } 读它
+    额外放逐: 放逐的,
     steps: o.def.能力?.牌效应 ?? [],
   };
   堆叠加(g, item);
@@ -944,12 +1072,54 @@ function 目标对象(t: 目标): Obj | null { return 取实体(t); }
  * 用最大二分匹配（Kuhn），**不用贪心**：条件嵌套时贪心会误判 ——
  *   甲的筛选更宽，先拿走了唯一的那个合法物件，乙就没得选；而正确分法是甲拿别的。
  */
+/** 候选的稳定键（物件 = o+uid，玩家 = p+号，堆叠项 = s+id） */
+export function 候选键(x: 候选): string {
+  return x.obj ? 'o' + x.obj.uid : x.堆叠项 !== undefined ? 's' + x.堆叠项 : 'p' + x.玩家;
+}
+
+/** 一个目标槽展开后的结果：候选 + （依赖槽）锚候选→该锚下合法候选 的映射 */
+export interface 展开规格 { sp: TargetSpec; 候选: 候选[]; 映射?: Map<string, 候选[]> }
+
+/**
+ * **展开「依赖前一个目标槽」的规格**（050 螺旋突刺的第二个目标）。
+ *   · 依赖槽的候选 = **以锚槽每个候选为锚**分别算出来的并集；
+ *   · 同时给出 锚候选 → 该锚下合法候选 的映射（客户端按它限制第二格能点谁）；
+ *   · 锚槽的候选收紧到「至少能配到 数量.最小 个」的那些。
+ * 目前只支持一层依赖（锚槽自己不依赖别人）。
+ */
+export function 展开依赖规格(g: GameState, 操控者: number, 规格: TargetSpec[], 锚?: Obj | null): 展开规格[] {
+  const 各: 展开规格[] = 规格.map((sp) => ({ sp, 候选: 候选目标(g, 操控者, sp, 锚 ?? null) }));
+  for (const it of 各) {
+    const 依赖名 = it.sp.依赖;
+    if (!依赖名) continue;
+    const 锚项 = 各.find((x) => x.sp.目标名 === 依赖名);
+    if (!锚项) { it.候选 = []; continue; }
+    const 映射 = new Map<string, 候选[]>();
+    const 并: 候选[] = [];
+    for (const a of 锚项.候选) {
+      if (!a.obj) continue;
+      const c = 候选目标(g, 操控者, it.sp, a.obj);
+      映射.set(候选键(a), c);
+      for (const x of c) if (!并.some((y) => 候选键(y) === 候选键(x))) 并.push(x);
+    }
+    it.候选 = 并;
+    it.映射 = 映射;
+    // 配不到东西的锚候选不能当第一目标（050：必须存在它的相对/斜对单位才能打出）
+    if (it.sp.数量.最小 > 0) {
+      锚项.候选 = 锚项.候选.filter((a) => a.obj && (映射.get(候选键(a))?.length ?? 0) >= it.sp.数量.最小);
+    }
+  }
+  return 各;
+}
+
 export function 能填满所有槽(g: GameState, 操控者: number, 规格: TargetSpec[], 锚?: Obj | null): boolean {
+  const 各 = 展开依赖规格(g, 操控者, 规格, 锚);
+  for (const it of 各) if (it.候选.length < it.sp.数量.最小) return false;
+  // 「一个物件只能进一个槽」仍用二分匹配 —— 依赖槽的配对一致性由 锚候选收紧 + 服务端校验保证
   const 需要: 候选[][] = [];
-  for (const sp of 规格) {
-    const c = 候选目标(g, 操控者, sp, 锚 ?? null);
-    // 一个槽要 最小 个 —— 展开成 最小 个同样的槽，交给匹配去分配
-    for (let i = 0; i < sp.数量.最小; i++) 需要.push(c);
+  for (const it of 各) {
+    if (it.sp.依赖) continue;
+    for (let i = 0; i < it.sp.数量.最小; i++) 需要.push(it.候选);
   }
   if (需要.length === 0) return true;
   const 键 = (x: 候选): string => (x.obj ? 'o' + x.obj.uid : x.堆叠项 !== undefined ? 's' + x.堆叠项 : 'p' + x.玩家);
@@ -1017,7 +1187,10 @@ function 取条件(sel: Selector | undefined, 属性: string): string | undefine
 type 单触发能力 = TriggeredAbility & { 触发: Trigger };
 function 展开能力触发(abs: TriggeredAbility[]): { ab: 单触发能力; i: number }[] {
   const out: { ab: 单触发能力; i: number }[] = [];
-  abs.forEach((ab, i) => {
+  abs.forEach((ab0, i) => {
+    // ⚠ 关键词能力（`{ 名称:'突击', 数值:2 }`）没有 `种类` —— 先按 702 章展开，
+    //   否则「突击 / 迎击 / 重整」这些**触发式关键词**永远进不了触发队列。
+    const ab = 解析能力(ab0 as unknown as Ability) as unknown as TriggeredAbility;
     const t = (ab as { 触发?: unknown }).触发;
     if (t && typeof t === 'object' && Array.isArray((t as { 任一?: unknown }).任一)) {
       for (const 项 of (t as { 任一: unknown[] }).任一) {
@@ -1244,6 +1417,8 @@ function 迎击检查(g: GameState, o: Obj, 操控者: number, 阵地: 阵地 | 
 
 /** **单个物件进场**（放置 → 记事件 → 排队触发 → 迎击 ✓）—— 绝大多数地方的入口 ✓ */
 export function 进战场(g: GameState, o: Obj, 操控者: number, 阵地: 阵地 | null, 替代?: 进场替代): void {
+  // 614.1a：有「进场横置」的替代效应 → 改成横置进场（109）
+  if (!替代?.横置 && 进场须横置(g, o, 操控者)) 替代 = { ...(替代 ?? {}), 横置: true };
   进场本体(g, o, 操控者, 阵地, 替代);
   记事件(g, '进战场', { 受方: o.uid });
   排队进战场触发(g, o);
@@ -1405,7 +1580,13 @@ export function 实际打出费用(g: GameState, p: number, def: CardDef): numbe
         for (const r of ab0.费用修正) 试一条(r, 有效控制器(g, o));
       }
     }
-    // ⚠ **这张牌自己身上**的减费也算（135 黄巾大军「你墓地中每有一张黄巾单位牌，此令符便减少{1}」）——
+    // 034：一次性的「下一张」减费（打出后消耗）
+  for (const r of g.临时费用修正 ?? []) {
+    if (r.玩家 !== p) continue;
+    if (r.筛选 && !符合筛选(g, { def } as Obj, r.筛选, 有效特征(g, { def } as Obj))) continue;
+    总 -= r.减;
+  }
+  // ⚠ **这张牌自己身上**的减费也算（135 黄巾大军「你墓地中每有一张黄巾单位牌，此令符便减少{1}」）——
     //   它结算前在手上/堆叠上，不是战场永久物，上面那个循环扫不到它。
     for (const ab0 of (def.能力?.能力 ?? []) as StaticAbility[]) {
       if (ab0.种类 !== '静止式' || !ab0.费用修正) continue;
@@ -1600,42 +1781,26 @@ export function 置入墓地(g: GameState, o: Obj): void {
   // 700.4：「死去」= 从战场进入墓地。**只有从战场进墓地才算**（令符结算进墓地不是死去）
   记事件(g, 曾在战场 ? '死去' : '离开战场', { 受方: o.uid });
   if (曾在战场) 排队死去触发(g, o, 旧阵地);
-  // 「当另一个单位死去时」：扫全场（死的是**它自己**那条已经在上面排过了）
-  if (曾在战场 && 是类别(g, o, '单位')) 排队其他死去触发(g, o);
 }
 
-/** 700.4：从战场进入墓地的触发。来源已在墓地，所以标 允许离场 */
 /**
- * 「当**另一个**…死去时」（156 亡国哀民）—— 触发.主体 是**选择器**（不是字面量）。
- *   ⚠ 死者自己不会触发它（那是 排队死去触发 干的事），是**战场上别人**在看着它死。
- *   **「另一个」由数据里的 `除:'自身'` 表达** ✓ —— 主体 只要不是 `'自身'`，本来就是「另一个」：
- *   匹配时在这里补 `除:'自身'`（锚 = 触发器自己），**数据不写** ✓。
- *   「单位」= `种类:'单位'`、「由你操控的」= `操控者:'你'` —— 这些才在选择器里 ✓。
+ * 「当…，若…，…」的**触发条件**（释疑·有条件的触发式能力）：只在触发时判一次。
+ * 不成立 = 这个能力**不触发** —— 不进 g.pending（所以也不会进 603.3b 的顺序选择、不问目标）。
+ *
+ * 为什么不把条件存到堆叠项上再在结算时判：条件不成立时效应本来就没东西可做（和"目标全非法"同一类），
+ * 结算入口已经按 608.2b / 603.3f 处理那些情况；多存一份条件只会多一处可能和实际不一致的状态。
+ * 「你」= 来源的**有效操控者**（613.1b），和连续效应、启动式的 条件 同一个口径。
  */
-export function 排队其他死去触发(g: GameState, 死者: Obj): void {
-  const 死者特征 = 有效特征(g, 死者);        // 死者已在墓地，特征只算一次 ✓
-  for (const o of [...g.战场]) {
-    if (o === 死者 || !有规则叙述(g, o)) continue;
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    const 锚控制器 = 有效控制器(g, o);
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      if (ab.种类 !== '触发式' || ab.触发.事件 !== '死去') return;
-      const 主体 = ab.触发.主体;
-      // 字面量是**关系**（自身 / 所附属 / 所佩带）—— 都不归这条路（「所佩带/所附属」反向扫场在下面）
-      if (!主体 || typeof 主体 === 'string') return;
-      // ★ 用**现成的**选择器匹配（和选目标/筛选同一套）✓：
-      //   「另一个」由数据里的 `除:'自身'` 表达 `除:'自身'`（排除来源自己）✓ —— 数据不写 ✓；
-      //   `操控者:'你'` = 和触发器**同一个操控者** ✓；
-      //   `种类` / `筛选` 判死者的特征 ✓ —— 以前「关系 / 类别 / 归属 / 特征」是四个平行字段 ✗。
-      if (!符合选择器(g, 死者, 主体, o, 锚控制器, 死者特征)) return;
-      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '其他死去触发'), 允许离场: true, 触发受方: 死者 });
-    });
-  }
+function 触发条件成立(g: GameState, 来源: Obj, ab: TriggeredAbility): boolean {
+  // 触发 可能是 { 任一: Trigger[] }（602.1 那种任一触发）—— 每条子触发各自的条件都成立才算
+  const 条 = '任一' in ab.触发 ? ab.触发.任一 : [ab.触发];
+  const 控制器 = 有效控制器(g, 来源);
+  return 条.every((t) => !t.条件 || 判断(g, 控制器, t.条件, 来源));
 }
 
 export function 排队死去触发(g: GameState, o: Obj, 位置?: 阵地 | null): void {
     // ⚠ 「它自己的死去触发」走通用广播 ✓（扫全场、按卡面 主体 判 ✓）；
-    //   「其他」由 排队其他死去触发 负责 ✓；「所佩带/所附属」下面那段保留 ✓。
+  //   「另一个」（主体是选择器）也由这一次广播负责 —— 扫描范围 = 战场 ∪ {受体} ✓
     排队单位事件触发(g, '死去', o, { 允许离场: true, 死者位置: 位置 ?? null, 触发受方: o });
     if (false) {   // 旧的自身扫描（保留结构、不再执行 ✓）
     const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
@@ -1643,8 +1808,9 @@ export function 排队死去触发(g: GameState, o: Obj, 位置?: 阵地 | null)
       // ⚠ 只有 主体 = '自身'（或没写）的才是「它自己的死去触发」。
       //   以前这里写的是 `!== '所佩带'` —— 于是「看着别人死去」的能力（156 亡国哀民）
       //   也被排了一次「它自己的死去触发」，界面上就多出一条（而且会双重结算）。
-      //   「另一个」由 排队其他死去触发 扫场排（主体 是选择器）；「所佩带/所附属」由下面那段反向扫排。
+  //   「另一个」= 主体是选择器，由 排队单位事件触发 的选择器分支排（数据要写 除:'自身'）✓
       if (ab.种类 === '触发式' && ab.触发.事件 === '死去' && (ab.触发.主体 ?? '自身') === '自身') {
+        if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
         g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '死去触发'), 允许离场: true, 触发受方: o, 死者位置: 位置 });
       }
     });
@@ -1664,6 +1830,7 @@ export function 排队死去触发(g: GameState, o: Obj, 位置?: 阵地 | null)
       // 关系存在**装备/数术**身上（佩带在 / 附属在 存的是那个**单位**的 uid），所以比的是 o.uid
       const 挂 = 主体 === '所佩带' ? x.佩带在 : x.附属在;
     if (!快照 && 挂 !== o.uid) return;   // 快照里已经只剩挂在它身上的物件 ✓
+      if (!触发条件成立(g, x, ab)) return;   // 「若…」不成立就不触发
       g.pending.push({ 来源: x, abilityIndex: k, 标签: 触发标签(x, 主体 + '死去触发'), 允许离场: true, 触发受方: o, 死者位置: 位置 });
     });
   }
@@ -1707,6 +1874,7 @@ export function 排队回复体力触发(g: GameState, 受方: number | Obj): vo
       展开能力触发(abs).forEach(({ ab, i }) => {
         if (ab.种类 !== '触发式' || ab.触发.事件 !== '回复体力') return;
         if (ab.触发.受方 === '实体') return;
+        if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
         g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '回复体力触发'), 触发受方: 受方 });
       });
     }
@@ -1737,6 +1905,7 @@ export function 排队造成伤害触发(g: GameState, 源: Obj, 受方: number 
         && !符合选择器(g, 源, 主体, o, 有效控制器(g, o), 有效特征(g, 源))) return;
       // 033 徐晃「对**玩家**造成伤害」—— 通用判据 触发.受方（原来是一个一次性的 对玩家 字段）
       if (ab.触发.受方 !== undefined && ab.触发.受方 !== (对玩家 ? '玩家' : '实体')) return;
+      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
       g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '造成伤害触发'), 触发量: 量, 触发受方: 受方 });
     });
   }
@@ -1758,6 +1927,7 @@ export function 排队玩家受到伤害触发(g: GameState, 玩家: number, 量
     展开能力触发(abs).forEach(({ ab, i }) => {
       if (ab.种类 !== '触发式' || ab.触发.事件 !== '受到伤害') return;
       if (ab.触发.受方 !== '玩家') return;
+      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
       g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '玩家受到伤害触发'), 触发量: 量, 触发受方: 玩家 });
     });
   }
@@ -1797,7 +1967,7 @@ export function 排队受到伤害触发(g: GameState, o: Obj, 量: number, 受�
 export const 事件派发: Record<事件名, { 派发在哪: string; 未实现?: true; 派发?: (g: GameState, 受体: Obj) => void }> = {
   进战场: { 派发在哪: '排队进战场触发 → 排队单位事件触发（通用广播 ✓，扫全场）', 派发: (g, o) => 排队进战场触发(g, o) },
   成为横置: { 派发在哪: '排队单位事件触发（通用广播 ✓）engine.ts:1151', 派发: (g, o) => 排队单位事件触发(g, '成为横置', o) },
-  死去: { 派发在哪: '排队死去触发 engine.ts:1462 ＋ 排队其他死去触发 :1464', 派发: (g, o) => { 排队其他死去触发(g, o); 排队死去触发(g, o); } },
+  死去: { 派发在哪: '排队死去触发（通用广播 排队单位事件触发 扫全场）', 派发: (g, o) => 排队死去触发(g, o) },
   离开战场: { 派发在哪: '移动流程里 记事件 ／ 排队移动触发 engine.ts:1447' },
   被指定为目标: { 派发在哪: '排队被指定为目标触发 engine.ts:906 / 3947' },
   受到伤害: { 派发在哪: '伤害流程 排队受到伤害触发 :2742 / 排队玩家受到伤害触发 :2729' },
@@ -1815,6 +1985,8 @@ export const 事件派发: Record<事件名, { 派发在哪: string; 未实现?:
   弃牌: { 派发在哪: '（卡数据没用）' },
   牺牲: { 派发在哪: '（卡数据没用）' },
   放逐: { 派发在哪: '（卡数据没用）' },
+  失去体力: { 派发在哪: 'case 失去体力 记事件（100 魔血祭）' },
+  观星: { 派发在哪: 'case 观星 完成时 排队事件触发（035）' },
 };
 
 /** `额外` = 这条事件特有的东西（受到伤害的「量」✓、宣告攻击的「受方」✓…）——
@@ -1873,7 +2045,10 @@ function 排队单位事件触发(g: GameState, 事件: '成为横置' | '进战
         // 「当某来源指定**另一个**单位为目标时」那种：来源要单独筛 ✓
         if (ab.触发.筛选来源 && (!来源 || !符合筛选(g, 来源, ab.触发.筛选来源, 有效特征(g, 来源)))) return;
       }
-      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, 触发名), 允许离场: true, 触发受方: 受体, ...(额外 ?? {}) });
+      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
+      // ⚠ 记下**展开后**的能力：关键词能力（突击/迎击…）本身没有 效应/steps，
+    //   进堆叠时若按 下标 重取原始 def 条目，steps 会是 undefined。
+    g.pending.push({ 来源: o, abilityIndex: i, 能力: ab as unknown as TriggeredAbility, 标签: 触发标签(o, 触发名), 允许离场: true, 触发受方: 受体, ...(额外 ?? {}) });
     });
   }
 }
@@ -1887,7 +2062,7 @@ function 排队单位事件触发(g: GameState, 事件: '成为横置' | '进战
  *
  * ⚠ 之前给 `打出牌` 只加了 `记事件` 没加这个扫描 —— 067 武侯符阵兵 的触发因此从没发生过。
  */
-export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' | '成为横置', 受方: number,
+export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' | '成为横置' | '观星', 受方: number,
   /** 事件里的那个物件（打出牌 = 那张牌）——「当你打出**锦囊**令符时」靠 触发.筛选来源 筛它（065） */
   事件牌?: Obj): void {
   for (const o of [...g.战场]) {
@@ -1902,9 +2077,29 @@ export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' 
       const 判牌 = (条件?: unknown): boolean => !条件 || (!!事件牌 && 符合筛选(g, 事件牌, 条件 as never));
       if (!判牌(ab.触发.筛选来源)) return;
       if (!判牌(ab.触发.筛选)) return;
+      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
       g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, 事件 + '触发'), 触发受方: 受方 });
     });
   }
+}
+
+/**
+ * **「当任一对手弃一张牌时」**（081 魔王之脑·李儒）。
+ * 弃牌事件没有“受体物件”，只有弃牌的玩家 —— 单独一条派发：扫全场、找操控者不是弃牌者的永久物上
+ * 「事件: 弃牌」的触发式能力，触发受方记成弃牌者（效应里的「该玩家」就指他）。
+ */
+ export function 排队弃牌触发(g: GameState, 弃牌者: number, 牌: Obj): void {
+  for (const o of [...g.战场]) {
+    if (!有规则叙述(g, o)) continue;
+    if (有效控制器(g, o) === 弃牌者) continue;      // 只对**对手**的弃牌触发
+    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
+    展开能力触发(abs).forEach(({ ab, i }) => {
+      if (ab.种类 !== '触发式' || ab.触发.事件 !== '弃牌') return;
+      if (!触发条件成立(g, o, ab)) return;
+      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '弃牌触发'), 触发受方: 弃牌者 });
+    });
+  }
+  void 牌;
 }
 
 /**
@@ -1967,6 +2162,7 @@ export function 排队步骤触发(g: GameState, 步骤: string): void {
         if (ab.触发.事件 !== '步骤开始' || ab.触发.步骤 !== 步骤) return;
         const who = ab.触发.谁的回合 ?? '你';
         if (who === '你' && 有效控制器(g, o) !== g.active) return;   // 「你的回合」按有效操控者
+        if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
         g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, 步骤 + '触发') });
       });
     }
@@ -2007,9 +2203,10 @@ export function 自动宣告(g: GameState, 决定?: 请求['决定']): Action | 
     return { 种类: '决定', 接受: true, 选: 键 };
   }
   if (!决定 || 决定.类型 !== '宣告') return null;
-  const 挑目标 = (规格: 规格[]) => 规格.map((sp) => {
-    const c = sp.候选.find((x) => x.敌) ?? sp.候选[0]!;
-    return { 目标名: sp.目标名, 类型: c.类型, uid: c.uid, 玩家: c.玩家 };
+  const 挑目标 = (规格: 规格[]) => 规格.flatMap((sp) => {
+    // 数量下限 0 的槽（「至多一个目标」）在没有合法候选时**可以不选** —— AI 别去碰空的 候选[0]
+    const c = sp.候选.find((x) => x.敌) ?? sp.候选[0];
+    return c ? [{ 目标名: sp.目标名, 类型: c.类型, uid: c.uid, 玩家: c.玩家 }] : [];
   });
   if (决定.模式候选 && 决定.模式候选.length > 0) {
     const m = 决定.模式候选[0]!;
@@ -2022,7 +2219,9 @@ export function 自动宣告(g: GameState, 决定?: 请求['决定']): Action | 
 function 造触发式堆叠项(
   g: GameState, src: Obj, ab: TriggeredAbility, 标签: string,
   触发量?: number,
-  选择?: { 模式?: number; 目标?: { 目标名: string; 类型: '实体' | '玩家'; uid?: number; 玩家?: number }[] },
+  选择?: { 模式?: number; 目标?: { 目标名: string; 类型: '实体' | '玩家'; uid?: number; 玩家?: number }[];
+    /** 条件执行 段的目标（进堆叠时指定；键 = 段里的 目标名） */
+    步骤目标?: { 目标名: string; 类型: '实体' | '玩家'; uid?: number; 玩家?: number }[] },
   预选?: { 目标: (Obj | number)[]; 目标槽: Record<string, Obj | number> },
   触发受方?: number | Obj,
 ): StackItem | null {
@@ -2054,6 +2253,18 @@ function 造触发式堆叠项(
     if (键) 写记忆(g, src, 键, [...已选, m]);
   }
 
+  // 条件执行 段的目标（进堆叠时由操控者指定）—— 只把答上来的那些收进 步骤目标槽
+  const 步骤目标槽: Record<string, Obj | number> | undefined = (() => {
+    const 给 = 选择?.步骤目标;
+    if (!给 || !给.length) return undefined;
+    const 出: Record<string, Obj | number> = {};
+    for (const t of 给) {
+      const v = t.类型 === '玩家' ? t.玩家! : 找实体(g, t.uid!);
+      if (v === undefined || v === null) continue;
+      出[t.目标名] = v as Obj | number;
+    }
+    return Object.keys(出).length ? 出 : undefined;
+  })();
   if (预选) {
     for (const spec of 目标清单) {
       const v = 预选.目标槽[spec.目标名];
@@ -2061,35 +2272,76 @@ function 造触发式堆叠项(
     }
     const steps = ab.模式 ? ab.模式.选项[chosenMode!]!.效应 : ab.效应;
     return { id: g.nextStackId++, 种类: '触发式', 标签, 操控者: src.操控者,
-      来源: src, card: null, 目标, 目标槽, chosenMode, 可选: ab.可选, steps, 触发量, 触发受方 };
+      来源: src, card: null, 目标, 目标槽, chosenMode, 可选: ab.可选, steps, 触发量, 触发受方,
+      ...(步骤目标槽 ? { 步骤目标槽 } : {}) };
   }
-  // ⚠ **目标不在这里选** —— 规则没规定时点，本引擎定为**结算时**（见 StackItem.待定目标）。
-  //   这里只把规格挂上；候选要到结算那一刻才算（那时读到的才是当时的合法性）。
+  // ⚠ **触发式能力的目标在「放进堆叠」时问**（603.3d）—— 由 `把待触发放进堆叠G` 发一次 宣告，
+  //   选好的写进 `预选`/`目标槽`，走到这里时 目标 已经是实的。
+  //   `待定目标` 只是**直接调用 结算堆叠顶**（测试 / AI，没经过放堆叠那一问）时的兜底。
   const stepsT = ab.模式 ? ab.模式.选项[chosenMode!]!.效应 : ab.效应;
   return {
     id: g.nextStackId++, 种类: '触发式', 标签, 操控者: src.操控者,
     来源: src, card: null, 目标: [], 目标槽: {}, 待定目标: 预选 ? undefined : 目标清单,
     chosenMode, 可选: ab.可选, steps: stepsT, 触发量, 触发受方,
+    ...(步骤目标槽 ? { 步骤目标槽 } : {}),
   };
 }
 
-/** uid → 实体。⚠ **只找战场和堆叠**（`取实体` 那一族找的是别处）—— 手牌/墓地/牌库里的牌它找不到 */
+/**
+ * uid → 实体。**覆盖所有区域**（战场 / 堆叠 / 手牌 / 墓地 / 牌库 / 放逐区）。
+ *
+ * ⚠ 以前只扫战场和堆叠 —— 于是「目标可以是墓地里的牌」的触发式能力（118 英魂附体
+ *   从墓地放逐一张单位牌）在这一步就把目标丢掉了：需求发得出去、玩家也点了，
+ *   但这里返回 null → 目标槽空着 → 效应里「解析不到受方」，整段不执行。
+ *   施放（锦囊）那条路一直没问题，因为它走的是 解析动作.ts 的 找任意区域物件。
+ */
 function 找实体(g: GameState, uid: number): Obj | null {
   for (const o of g.战场) if (o.uid === uid) return o;
   for (const it of g.stack) if (it.card && it.card.uid === uid) return it.card;
-  return null;
+  for (const pl of g.players) {
+    const 中 = [...pl.hand, ...pl.graveyard, ...pl.library].find((x) => x.uid === uid);
+    if (中) return 中;
+  }
+  return g.放逐区.find((x) => x.uid === uid) ?? null;
 }
 
 /**
- * 组装「宣告」决定 —— **只问模式**（700.2b / 603.3c 明文：模式是能力的一部分、进堆叠时定）。
- * ⚠ **目标不在这里问** —— 规则没有规定时点，本引擎定为结算时，见 StackItem.待定目标。
- * 返回 null = 没有可宣告的模式（调用方按 603.3f 把它从堆叠移除）。**无模式的能力也返回 null**，
- *   但那表示「进堆叠时不用问任何东西」，调用方要分清这两种 null。
+ * 组装「宣告」决定 —— 模式（700.2b / 603.3c）+ **目标规格**（603.3d：放进堆叠时选）。
+ * 返回 null = 没有可宣告的东西（无模式、也无需在进堆叠时选目标）。
+ *   ⚠ 触发式能力**有目标**时，这里会返回带 `规格` 的决定，由 `把待触发放进堆叠G` 问出去；
+ *     `待定目标` 只是直接调用 结算堆叠顶（测试 / AI）时的兜底，不是正常时点。
  */
+/**
+ * **条件执行 段的目标规格**（118 蔡文姬「若你操控蜀势力领土，至多一个目标单位…」）。
+ *
+ * 这类目标要在**进入堆叠时**（结算前）由操控者指定，而不是结算时才问 ——
+ * 所以 组装宣告决定 会为「条件此刻成立」的段发一次 宣告。
+ * 条件此刻不成立的段**不问**（结算时若条件反而成立，那一段也不做：没指定目标）。
+ */
+function 条件组目标们(g: GameState, src: Obj, ab: TriggeredAbility): TargetSpec[] {
+  const 我 = 有效控制器(g, src);
+  const 出: TargetSpec[] = [];
+  for (const st of (ab.效应 ?? []) as ResolveStep[]) {
+    if (!st || typeof st !== 'object' || st.操作 !== '条件执行') continue;
+    const 段 = st as { 条件?: Condition; 目标?: TargetSpec[]; 效应: ResolveStep[] };
+    if (!段.目标 || !段.目标.length) continue;
+    if (段.条件 && !判断(g, 我, 段.条件, src)) continue;
+    出.push(...段.目标);
+  }
+  return 出;
+}
+
 function 组装宣告决定(g: GameState, src: Obj, ab: TriggeredAbility, 标签: string): 宣告决定 | null {
-  const 触发时 = ab.目标时点 === '触发时';
-  // 「若如此做」类：目标**触发时就选** —— 无模式但有目标时，这一问就是为它问的。
-  if (!ab.模式) return 触发时 && (ab.目标 ?? []).length ? { 类型: '宣告', 标签, 来源uid: src.uid, 可选: ab.可选, 规格: 建规格(g, src, ab.目标!) } : null;
+  /**
+   * **触发时选目标**（115.1d / 603.3d）—— 所有触发式能力的目标都在「进入堆叠时」指定，
+   * 和这条能力有没有「你可以」无关（603.5：含「可以」的能力照样在触发时进堆叠，
+   * 选择在结算时作出）。所以这里不再有 `目标时点` 之分。
+   */
+  if (!ab.模式) {
+    // 能力级目标 + 条件执行 段里「条件此刻成立」的目标
+    const 规格s = [...(ab.目标 ?? []), ...条件组目标们(g, src, ab)];
+    return 规格s.length ? { 类型: '宣告', 标签, 来源uid: src.uid, 可选: ab.可选, 规格: 建规格(g, src, 规格s) } : null;
+  }
   const ms = ab.模式;
   const 已选 = (src.记忆[ms.记忆?.记忆键 ?? ''] as number[] | undefined) ?? [];
   const 我 = 有效控制器(g, src);
@@ -2098,8 +2350,8 @@ function 组装宣告决定(g: GameState, src: Obj, ab: TriggeredAbility, 标签
     if (ms.记忆?.禁止重复 && 已选.includes(i)) return;
     // 700.2b / 603.3c：没有合法目标的模式不能被选（目标**合法与否**是状态属性，这里读一次）
     if (!(o.目标 ?? []).every((sp) => 候选目标(g, 我, sp, src).length > 0)) return;
-    // 「若如此做」类：模式的目标**现在就问**；否则规格留到结算时再算（那时读到的才是当时的合法性）。
-    模式候选.push({ 索引: i, 标签: o.标签, 规格: 触发时 ? 建规格(g, src, o.目标 ?? []) : [] });
+    // 模式的目标同样在进堆叠时问（603.3c/603.3d）
+    模式候选.push({ 索引: i, 标签: o.标签, 规格: 建规格(g, src, o.目标 ?? []) });
   });
   if (模式候选.length === 0) return null;
   return { 类型: '宣告', 标签: 标签, 来源uid: src.uid, 可选: ab.可选, 模式候选 };
@@ -2120,6 +2372,20 @@ function 建规格(g: GameState, src: Obj, specs: TargetSpec[]): 规格[] {
 }
 
 /** 生成器版：需要玩家选择时会 yield 一个「宣告」决定 */
+/**
+ * 一张牌要求的**目标规格** —— 有依赖槽时用 展开依赖规格 按锚展开候选。
+ * ⚠ 卡面的目标写在 `def.能力.目标`（EffectProgram 里），不是 `def.目标`。
+ */
+export function 目标规格(def: { 目标?: TargetSpec[]; 能力?: { 目标?: TargetSpec[] } }, 模式号?: number): TargetSpec[] {
+  void 模式号;
+  return def.目标 ?? def.能力?.目标 ?? [];
+}
+
+/** 某个目标槽的候选（锚 = 依赖槽已选中的那个目标；省略 = 效应来源） */
+export function 目标候选(g: GameState, 控: number, spec: TargetSpec, 锚: Obj | null): 候选[] {
+  return 候选目标(g, 控, spec, 锚, true);
+}
+
 export function* 把待触发放进堆叠G(g: GameState, opts: 时机选项, 步骤: string): Generator<请求, void, Action | null> {
   // ── 603.3b 的**第二步**（占位，未实现）────────────────────────────────
   // 规则原文：「首先…将他所操控的、**且不以另一个能力触发为触发条件的**触发式能力…放进堆叠。
@@ -2177,39 +2443,71 @@ export function* 把待触发放进堆叠G(g: GameState, opts: 时机选项, 步
     const t = g.pending[0]!;
     const ab = t.能力 ?? ((t.来源.def.能力?.能力 ?? []) as TriggeredAbility[])[t.abilityIndex];
     if (!ab || (t.来源.区域 !== '战场' && !t.允许离场)) { g.pending.shift(); continue; }
+    // 005：每回合只触发一次
+    if (ab.限制 === '每回合一次' && 本回合触发过的能力(t.来源, g.turn).includes(t.abilityIndex)) {
+      g.pending.shift();
+      记录(g, t.标签 + '：本回合已经触发过，跳过');
+      continue;
+    }
     const 有模式 = !!ab.模式;
     const 决定 = t.预选 ? null : 组装宣告决定(g, t.来源, ab, t.标签);
+    // 603.3f：**进堆叠时**就要能作出合法选择 —— 目标凑不齐的能力根本不进堆叠
+    if (决定) {
+      const 规格们 = 决定.模式候选 ? 决定.模式候选.flatMap((m) => m.规格) : (决定.规格 ?? []);
+      const 缺 = 规格们.some((sp) => sp.候选.length < sp.数量.最小);
+      if (缺) {
+        g.pending.shift();
+        记录(g, t.标签 + '：没有合法目标，从堆叠移除（603.3f）');
+        continue;
+      }
+    }
     if (!决定) {
       g.pending.shift();
-      // ⚠ **两种 null 要分清**：有模式 = 模式全非法 → 603.3f 从堆叠移除；
-      //   无模式 = 进堆叠时本来就不用问任何东西（目标留到结算）。
+      // 有模式 = 模式全非法 → 603.3f 从堆叠移除；无模式 = 进堆叠时不用问任何东西
       if (有模式 && !t.预选) { 记录(g, t.标签 + '：没有可选模式，从堆叠移除（603.3f）'); continue; }
       const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.触发量, undefined, t.预选, t.触发受方);
-      // 134：把「死者原先的阵地」一并带到堆叠项上（效应里读 item.死者位置）
       if (it) it.死者位置 = t.死者位置;
-      if (it) 堆叠加(g, it);
+      if (it) { 堆叠加(g, it); if (ab.限制 === '每回合一次') 记一次触发(g, t.来源, t.abilityIndex); }
       continue;
     }
     const 答 = yield { 玩家: t.来源.操控者, 时机: opts, 步骤, 决定 };
     g.pending.shift();
     if (!答 || 答.种类 !== '宣告') { 记录(g, t.标签 + '：未宣告，能力从堆叠移除'); continue; }
-    // 「若如此做」类（`目标时点: '触发时'`）：目标已经在上面那一问里选好了，落成**预选** ——
-    //   造触发式堆叠项 会把它写进 目标/目标槽，结算时就不再问。
-    //   其余的（新标准「当你如此做时」）保持原样：目标留到结算。
-    const 预选 = ab.目标时点 === '触发时' ? (() => {
+    /**
+     * **模式的目标也在这里问完**（603.3c 模式 + 603.3d 目标，都在进入堆叠时）。
+     * 先问模式（上面那一问），再单独问一次该模式的目标 —— 客户端不用改（同一套 宣告 需求）。
+     */
+    let 目标答 = 答.目标 ?? [];
+    if (答.模式 !== undefined && ab.模式) {
+      const 选模式 = ab.模式.选项[答.模式];
+      const 规格们 = 选模式?.目标 ?? [];
+      if (规格们.length) {
+        const 控0 = 有效控制器(g, t.来源);
+        const 缺2 = 规格们.some((sp) => 候选目标(g, 控0, sp, t.来源).length < sp.数量.最小);
+        if (缺2) { 记录(g, t.标签 + '：没有合法目标，从堆叠移除（603.3f）'); continue; }
+        const 答2 = yield { 玩家: t.来源.操控者, 时机: opts, 步骤,
+          决定: { 类型: '宣告', 标签: t.标签, 来源uid: t.来源.uid, 规格: 建规格(g, t.来源, 规格们) } };
+        if (!答2 || 答2.种类 !== '宣告') { 记录(g, t.标签 + '：未宣告目标，能力从堆叠移除'); continue; }
+        目标答 = 答2.目标 ?? [];
+      }
+    }
+    /**
+     * **目标在这里落定**（115.1d / 603.3d：进入堆叠时指定）——
+     * 能力级目标和 条件执行 段目标都在这一问里答完；结算时不再问。
+     */
+    const 预选 = (() => {
       const 目标: (Obj | number)[] = [];
       const 目标槽: Record<string, Obj | number> = {};
-      for (const t2 of (答.目标 ?? [])) {
+      for (const t2 of 目标答) {
         const v = t2.类型 === '玩家' ? t2.玩家! : 找实体(g, t2.uid!);
         if (v === undefined || v === null) continue;
         目标.push(v as Obj | number); 目标槽[t2.目标名] = v as Obj | number;
       }
       return { 目标, 目标槽 };
-    })() : undefined;
-    const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.触发量, { 模式: 答.模式 }, 预选);
-      // 134：把「死者原先的阵地」一并带到堆叠项上（效应里读 item.死者位置）
-      if (it) it.死者位置 = t.死者位置;
-    if (it) 堆叠加(g, it);
+    })();
+    const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.触发量, { 模式: 答.模式, 步骤目标: 答.目标 }, 预选);
+    if (it) it.死者位置 = t.死者位置;
+    if (it) { 堆叠加(g, it); if (ab.限制 === '每回合一次') 记一次触发(g, t.来源, t.abilityIndex); }
   }
 }
 
@@ -2232,9 +2530,9 @@ export function 结算堆叠顶(g: GameState): boolean {
     item.已开始 = true;
     // 608.2b：每个「目标」对应的目标均非法 -> 被规则取消
     if (!目标仍合法(g, item)) { 记录(g, item.标签 + ' 因目标全部非法而被规则取消'); 堆叠弹出(g); 收尾堆叠项(g, item); return true; }
-    // ⚠ 触发式能力的目标是**结算时**才选的（规则书没规定时点，本引擎定的）。
-    //   直接调本函数（测试 / AI）时没有人先问过，所以这里补一次判定：
-    //   必需的目标一个都挑不出来 → 按 603.3f 的精神取消、不结算。
+    // ⚠ 正常流程里目标**已经在放进堆叠时选好**（603.3d，把待触发放进堆叠G）。
+    //   只有**直接调本函数**（测试 / AI）时没人先问过，`待定目标` 才会非空 —— 这里替玩家补一次：
+    //   必需的目标一个都挑不出来 → 按 603.3f 取消、不结算。
     if (item.待定目标 && item.待定目标.length) {
       const 锚 = item.来源 ?? item.card ?? null;
       const 控 = 锚 && typeof 锚 !== 'number' ? 有效控制器(g, 锚) : item.操控者;
@@ -2292,9 +2590,10 @@ export function 结算堆叠顶(g: GameState): boolean {
 }
 
 /** 这一步里有没有「还没满足的选」引用（有就把那个引用拿出来） */
-function 找互动引用(值: unknown): { 选: Selector; 数量?: { 最小: number; 最大: number }; 标签?: string } | null {
+function 找互动引用(值: unknown): { 选: Selector; 数量?: { 最小: number; 最大: number }; 标签?: string; 于?: RecipientRef } | null {
   if (!值 || typeof 值 !== 'object') return null;
-  for (const v of Object.values(值 as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(值 as Record<string, unknown>)) {
+    // `阵地到` 本身不再带「选」（阵地由 `移动` 自己挂问）；但 `阵地到.相对` 里的「选」是**选单位**（张飞），照常问。
     if (!v || typeof v !== 'object') continue;
     if ('选' in (v as object)) return v as never;
     const 内 = 找互动引用(v);
@@ -2338,12 +2637,29 @@ function 执行步骤(g: GameState, item: StackItem): boolean {
   }
   while (item.步骤游标 < item.steps.length) {
     const 步骤 = item.steps[item.步骤游标]!;
-    if (!item.本次选择) {
+    /**
+     * ⚠ **条件先判，再决定要不要问「选」**：条件执行 的 效应 里常常嵌着 `{选}` ——
+     *   先扫互动会在**条件不成立时也把那一问发出去**（045 诸葛亮：判定牌不是单位，
+     *   却先让你挑一个单位）。条件成立才轮到问。
+     */
+    if (步骤.条件 !== undefined && !判断(g, item.操控者, 步骤.条件, item.来源 ?? item.card ?? undefined, item)) {
+      if (步骤.操作 === '条件执行') 记录(g, (item.标签 ?? '') + '：条件不成立，这一段跳过');
+      item.上一步生效 = false;
+      item.步骤游标++;
+      continue;
+    }
+      const 互动 = 找互动引用(步骤);
+      if (!item.本次选择) {
       const r = 找互动引用(步骤);
       if (r) {
+
         // 候选走 候选目标(…, false)：**关掉抵抗/洞察**，它们只管「不能成为目标」
-        const 候选 = 候选目标(g, item.操控者, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: r.选 }, item.来源 ?? item.card, false)
-          .map((c) => c.obj).filter((x): x is Obj => !!x);
+        // `于` = 候选只从那一叠里挑（查看/展示给出的牌）；再用选择器筛一遍
+        const 候选 = r.于
+          ? 解析受方(g, item, r.于).filter((x): x is Obj => typeof x !== 'number')
+              .filter((x) => 符合选择器(g, x, r.选, item.来源 ?? null, item.操控者, 有效特征(g, x)))
+          : 候选目标(g, item.操控者, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: r.选 }, item.来源 ?? item.card, false)
+              .map((c) => c.obj).filter((x): x is Obj => !!x);
         if (候选.length === 0) {
           记录(g, '选：没有可选的物件，这一步跳过');
           item.步骤游标++;
@@ -2355,16 +2671,11 @@ function 执行步骤(g: GameState, item: StackItem): boolean {
         return false;
       }
     }
-    // 公共的「条件」（064 桃园结义那种「若本回合曾有…」）：不成立就整步跳过，
-    //   并把 上一步生效 置 false —— 后面的「若前一效应生效」照常能接。
-    if (步骤.条件 !== undefined && !判断(g, item.操控者, 步骤.条件, item.来源 ?? item.card ?? undefined, item)) {
-      item.上一步生效 = false;
-      item.步骤游标++;
-      continue;
-    }
     执行一步(g, item, 步骤);
     if (item.待选择) return false;
     item.步骤游标++;
+      // 「这一步的答案用完即弃」—— 留着会被后面的步骤捡走（弃牌 曾把上一步选的领土当手牌弃掉）
+      if (互动) item.本次选择 = undefined;
   }
   return true;
 }
@@ -2377,13 +2688,20 @@ export function 应用选择(g: GameState, item: StackItem, 答: Action | null):
   // ⚠ **不要 .map(Number)** —— 键可能是字符串（'接受' 这类选项）。只把数字当 uid 用。
   const 选 = (答 && 答.种类 === '决定' && Array.isArray(答.选)) ? (答.选 as (number | string)[]) : [];
     // ⚠ 可选门的答案单独存 ✓（标签含"你可以这样做"= 门）→ 不污染 op 的 本次选择 ✓
-    if (d.类型 === '选' && typeof d.标签 === 'string' && d.标签.includes('你可以这样做')) {
+    if (d.类型 === '选' && ((d as { 门?: boolean }).门 === true || (typeof d.标签 === 'string' && d.标签.includes('你可以这样做')))) {
       (item as unknown as { 本次门?: (number | string)[] }).本次门 = 选;
       return;
     }
   const 步骤 = item.steps[item.步骤游标!] as { 去处?: string; 从?: string[]; 玩家?: number } | undefined;
   if (false) {
 
+  } else if (d.类型 === '查看') {
+    // 纯展示：没有选择、也没有“未搜寻到”。
+    // ⚠ 和「选」一样**不推进游标**，把答复放进 `本次选择` 让本步重跑一遍 ——
+    //   这样它既能用于普通步骤，也能用在 条件执行 的子步骤里（子步的进度靠 子步 记）。
+    记录(g, g.players[d.玩家]!.name + (d.等双方确认 ? ' 确认了展示' : ' 看完并确认'));
+    item.本次选择 = [];
+    return;
   } else if (d.类型 === '选') {
     // 答复交给**本步**用：存进 本次选择，游标**不推进** —— 让同一步重跑一遍把它用掉。
     // 键可能是数字（物件 uid）也可能是字符串（'接受' 这类选项）—— 数字才去找物件，其余原样留着。
@@ -2398,8 +2716,13 @@ export function 应用选择(g: GameState, item: StackItem, 答: Action | null):
     // 挑领土付钱那种会在答复里带 支付源，本步要用 → 先存着
     const 源 = (答 as unknown as { 支付源?: number[] }).支付源;
     if (Array.isArray(源) && 源.length) item.本次支付源 = 源;
-    记录(g, g.players[d.玩家]!.name + ' 选了 '
-      + (item.本次选择.map((x) => (typeof x === 'number' ? String(x) : typeof x === 'string' ? x : x.def.全名)).join('、') || '（没有）'));
+      // 「零选」不等于「选了（没有）」：`展示` 与「只看」的检视 都是**纯确认**（数量 0..0），
+      //   以前一律记成「X 选了（没有）」→ 日志看着像有人放弃了选择（2026-10 报的）。
+      const 选名 = item.本次选择
+        .map((x) => (typeof x === 'number' ? String(x) : typeof x === 'string' ? x : x.def.全名)).join('、');
+      if (d.等双方确认) 记录(g, g.players[d.玩家]!.name + ' 确认了展示/查看');
+      else if ((d.数量?.最大 ?? 0) === 0) 记录(g, g.players[d.玩家]!.name + ' 看完并确认');
+      else 记录(g, g.players[d.玩家]!.name + ' 选了 ' + (选名 || '（没有）'));
     return;                                   // ⚠ 不推进游标
   } else if ((步骤 && 步骤.去处 !== undefined) || (d as { 去处?: string }).去处 !== undefined) 完成搜寻(g, item, d, 步骤 ?? {}, 选.filter((x): x is number => typeof x === 'number'));
   item.步骤游标 = (item.步骤游标 ?? 0) + 1;
@@ -2474,7 +2797,43 @@ function 完成搜寻(g: GameState, item: StackItem, d: Extract<NonNullable<Stac
  * 一个堆叠项结算完之后的收尾：令符没留在战场就进墓地（608.2），再清掉它的状态。
  * ⚠ 这是**唯一**的堆叠项回收点 —— 别在结算的各个分支里自己 `splice` 掉堆叠。
  */
+/** 701.25a：这次判定结束 —— 判定牌还在牌库顶就置底；清引用与公开标记 */
+function 收尾判定(g: GameState, item: StackItem): void {
+  const 牌 = item.判定牌;
+  const 主 = item.判定主 ?? item.操控者;
+  if (牌 && 牌.区域 === '牌库') {
+    const 库 = g.players[主]?.library;
+    if (库 && 库[库.length - 1] === 牌) {
+      库.pop();
+      库.unshift(牌);
+      记录(g, 牌.def.全名 + '（判定牌）仍在牌库顶 → 置于牌库底（701.25a）');
+    }
+  }
+  item.判定牌 = undefined;
+  item.判定主 = undefined;
+  g.判定中 = null;
+}
+
+/**
+ * 701.25 + 释疑：判定牌的费用值 = 印制费用值（领土牌 / {X} 一律按 0）+ 所有「判定费用修正」。
+ * 修正按**进行判定的玩家**算（群星 059 许贡家臣「于你计算判定牌的费用值时 +3」）。
+ */
+export function 判定费用值(g: GameState, o: Obj, 判定者: number): number {
+  const v = 牌面费用值(o.def.打出费用);
+  let n = v === 'X' ? 0 : v;
+  for (const x of g.战场) {
+    if (有效控制器(g, x) !== 判定者) continue;
+    for (const ab of (x.def.能力?.能力 ?? []) as StaticAbility[]) {
+      if (ab.种类 !== '静止式' || ab.判定费用修正 === undefined) continue;
+      n += ab.判定费用修正;
+    }
+  }
+  return n;
+}
+
 function 收尾堆叠项(g: GameState, item: StackItem): void {
+  // 701.25a：判定牌若仍在牌库顶 → 置于牌库底（离开牌库顶就不动）
+  收尾判定(g, item);
   if (item.种类 === '令符' && item.card && item.card.区域 === '堆叠') {
     // 未能留在战场的令符进墓地
     置入墓地(g, item.card);
@@ -2554,6 +2913,13 @@ function 取值(g: GameState, 控制器: number, v: Value, o?: Obj, 记忆源?: 
   if (typeof v === 'number') return v;
   if (v === 'X') return 宣告X ?? 0;          // 108.3a：费用里带 {X} 的牌/能力
   if (!v || typeof v !== 'object') return 0;
+  // 「本回合失去的体力数量」—— 事件记录里累加（119 失去体力不是伤害，所以只能查事件）
+  if ('本回合失去体力' in v) {
+    const 号 = v.本回合失去体力 === '你' ? 控制器 : Number(v.本回合失去体力);
+    return g.事件记录
+      .filter((ev) => ev.事件 === '失去体力' && ev.回合 === g.turn && ev.受方 === 号)
+      .reduce((n, ev) => n + Number(ev.数量 ?? 0), 0);
+  }
   // 「乘以系数」（107 黄盖「每已损失 1 点体力，便 +2 武力」）—— 递归求内层再乘
   if (typeof v !== 'number' && '乘以' in v) return 取值(g, 控制器, v.乘以, o, 记忆源, 宣告X) * v.系数;
   if (typeof v !== 'number' && '加' in v) return 取值(g, 控制器, v.加, o, 记忆源, 宣告X) + v.值;
@@ -2563,6 +2929,13 @@ function 取值(g: GameState, 控制器: number, v: Value, o?: Obj, 记忆源?: 
     if (v.stat === '体力') return pl.体力;
     if (v.stat === '体力上限') return pl.lifeMax;
     return pl.hand.length;
+  }
+  // 「任一对手的…」= 对手里取最大（没人时 0）—— 每次算特征都会重新求值，所以是**实时**的
+  if ('任一对手' in v) {
+    const 表 = g.players.filter((x) => x.index !== 控制器);
+    const 取 = (pl: (typeof g.players)[number]) => v.任一对手 === '体力' ? pl.体力
+      : v.任一对手 === '体力上限' ? pl.lifeMax : pl.hand.length;
+    return 表.length ? Math.max(...表.map(取)) : 0;
   }
   // 「这个物件自己的」属性 —— 只有判定点知道是哪个物件时才算得出来
   if ('自身' in v) {
@@ -2597,6 +2970,12 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
   // 306.4b：这个物件是否附属于某个实体。
   // ⚠ c.目标 在 持续 操作 结算时已经**解析成 uid 字符串**了（见那里的注释）
   if (c.操作 === '附属在') return o?.附属在 !== undefined && o.附属在 === Number(c.目标);
+  // 「如果该单位是女性」这类：读这一步选中的目标，按特征筛
+  if (c.操作 === '目标符合') {
+    const t = item?.目标槽?.[c.目标];
+    if (!t || typeof t === 'number' || '堆叠项' in t) return false;
+    return 符合筛选(g, t as Obj, c.筛选, 有效特征(g, t as Obj));
+  }
   // 「若本回合曾有…」（064 桃园结义）—— 查事件记录：事件名 + 本回合 + 受方的操控者/特征
   if (c.操作 === '本回合发生过') {
     const 找物 = (uid: number): Obj | undefined =>
@@ -2621,7 +3000,69 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
       return !c.筛选 || 符合筛选(g, o2, c.筛选);
     });
   }
+  if (c.操作 === '本回合第几次') {
+    const 数 = g.事件记录.filter((ev) => {
+      if (ev.事件 !== c.事件 || ev.回合 !== g.turn) return false;
+      if (typeof ev.受方 !== 'number') return false;
+      const o2 = g.战场.find((x) => x.uid === ev.受方) ?? g.stack.map((s) => s.card).find((x): x is Obj => !!x && x.uid === ev.受方);
+      return !!o2 && (!c.筛选 || 符合筛选(g, o2, c.筛选));
+    }).length;
+    return 数 === c.次;
+  }
   // 「于对手的回合中」这类 —— 比较的是**当前回合玩家**和这个条件的判定者
+  // 「若你操控魏势力领土」这类（115 蔡文姬等）：场上有没有满足筛选的物件
+  if (c.操作 === '存在') {
+    // 「谁的」不单独判：筛选里写 `操控者:'你'` 就够（控制器 / 锚 已经传下去）
+    const 至少 = c.至少 ?? 1;
+    const 候 = c.于 ? (item ? 解析受方(g, item, c.于).filter((x): x is Obj => typeof x !== 'number') : []) : g.战场;
+    let 数 = 0;
+    for (const x of 候) {
+      if (符合筛选(g, x, c.筛选, undefined, undefined, undefined, o, 控制器)) { 数++; if (数 >= 至少) break; }
+    }
+    return 数 >= 至少;
+  }
+  // 701.25：判定牌的信息（没判定 / 牌库空 / 已收尾 → false）
+  if (c.操作 === '判定属性') {
+    const 牌 = item?.判定牌;
+    if (!牌) return false;
+    // 值可以是「某个目标的费用值」（022 狼顾之计「≥ 该令符的费用值」）
+    const 解一项 = (v: unknown): string => {
+      // 「你本回合中失去过的体力数量」（100 魔血祭）
+      if (v && typeof v === 'object' && '本回合失去体力' in (v as Record<string, unknown>)) {
+        const 谁 = String((v as { 本回合失去体力: string }).本回合失去体力);
+        const 玩家号 = 谁 === '你' ? 控制器 : Number(谁);
+        return String(g.事件记录
+          .filter((ev) => ev.事件 === '失去体力' && ev.回合 === g.turn && ev.受方 === 玩家号)
+          .reduce((n, ev) => n + Number(ev.数量 ?? 0), 0));
+      }
+      if (v && typeof v === 'object' && '目标费用' in (v as Record<string, unknown>)) {
+        const 名 = String((v as { 目标费用: string }).目标费用);
+        const t = item?.目标槽?.[名];
+        const o2 = t && typeof t === 'object' && !('堆叠项' in t) ? (t as Obj) : undefined;
+        if (!o2 || !o2.def) return '';
+        const cv = 牌面费用值(o2.def.打出费用);
+        return String(cv === 'X' ? 0 : cv);
+      }
+      return String(v);
+    };
+    const 值列 = (c.值 === undefined ? [] : (Array.isArray(c.值) ? c.值 : [c.值])).map(解一项);
+    const 有 = (xs: (string | number)[]) => xs.map(String);
+    let 实际: (string | number)[] = [];
+    if (c.属性 === '类别') 实际 = 牌.def.类别;
+    else if (c.属性 === '势力') 实际 = 牌.def.势力 ?? [];
+    else 实际 = [判定费用值(g, 牌, 控制器)];
+    switch (c.比较 ?? '是') {
+      case '是': return 值列.length === 0 ? 实际.length > 0 : 值列.some((v) => 有(实际).includes(v));
+      case '不是': return !值列.some((v) => 有(实际).includes(v));
+      case '包含': return 值列.some((v) => 有(实际).some((x) => String(x).includes(v)));
+      case '不含': return !值列.some((v) => 有(实际).some((x) => String(x).includes(v)));
+      case '大于': return 实际.some((x) => typeof x === 'number' && Number(值列[0]) < x);
+      case '小于': return 实际.some((x) => typeof x === 'number' && Number(值列[0]) > x);
+      case '大于等于': return 实际.some((x) => typeof x === 'number' && x >= Number(值列[0]));
+      case '小于等于': return 实际.some((x) => typeof x === 'number' && x <= Number(值列[0]));
+      default: return false;
+    }
+  }
   if (c.操作 === '回合是') {
     const 是我 = g.active === 控制器;
     return c.谁的 === '你' ? 是我 : !是我;
@@ -2641,13 +3082,47 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
 function 解析受方(g: GameState, item: StackItem, r: any): (Obj | number)[] {
   if (r.ref === '操控者') return [item.操控者];
   if (r.ref === '额外牺牲') return item.额外牺牲 ? [item.额外牺牲] : [];
+  if (r.ref === '额外放逐') return item.额外放逐 ? [item.额外放逐] : [];
   if (r.ref === '自身') return item.来源 ? [item.来源] : (item.card ? [item.card] : []);
   // 「该玩家」/「该单位」= 触发这件事的那个受方
   if (r.ref === '触发受方') return item.触发受方 === undefined ? [] : [item.触发受方];
   // 「记住」下来的受方（玩家号或物件）
-  if (r.记忆 !== undefined) { const v = 读记忆(item, r.记忆); return v === undefined ? [] : [v as number | Obj]; }
+    // 「记住」下来的受方（玩家号 / 物件 / **一批物件**）。`查看`/`展示` 的 `记到` 存的是数组
+  //   → 这里展开，于是 `移动 to: { 记忆: '顶牌' }` 就是“我刚刚看到那张”，不再按区域重查。
+  if (r.记忆 !== undefined) {
+    const v = 读记忆(item, r.记忆);
+    if (v === undefined) return [];
+    const 出 = Array.isArray(v) ? (v as (number | Obj)[]) : [v as number | Obj];
+    // `筛选`：只取其中符合条件的（「其中三张领土」那种）
+    if (!r.筛选) return 出;
+    return 出.filter((x) => typeof x === 'number'
+      || 符合筛选(g, x, r.筛选!, 有效特征(g, x), undefined, 记忆宿主(item) ?? undefined, item.来源 ?? null, item.操控者));
+  }
   // 效应链暂存位里的牌（「搜寻 …… 该牌 ……」）
   if (r.ref === '暂存') return [...(item.暂存 ?? [])];
+  // 按阵地关系取一批（050）：锚默认 = 效应来源，可用 `相对` 指定
+  if (r.selectRelation !== undefined) {
+    const 锚 = (r.相对 != null ? 解析受方(g, item, r.相对).find((x): x is Obj => typeof x !== 'number') : undefined)
+      ?? (item.来源 ?? item.card ?? undefined);
+    if (!锚 || !锚.阵地) return [];
+    const 控 = 有效控制器(g, 锚);
+    const 自己 = g.players[控]!;
+    const 敌 = g.players[(控 + 1) % g.players.length]!;
+    const 邻 = r.selectRelation === '相邻';
+    const 位 = r.selectRelation === '相对' ? [相对阵地(锚.阵地)!]
+      : 邻 ? 相邻阵地(锚.阵地) : 斜对阵地(锚.阵地);
+    const 出: Obj[] = [];
+    for (const x of 位) { const t = 邻 ? 自己.阵地[x] : 敌.阵地[x]; if (t) 出.push(t); }
+    return 出;
+  }
+  // 701.25：这条链上那次判定的牌
+  if (r.ref === '判定牌') return item.判定牌 ? [item.判定牌] : [];
+  // 某个受方的操控者（060「该单位的操控者」）
+  if (r.操控者 !== undefined) {
+    return 解析受方(g, item, r.操控者)
+      .map((x) => (typeof x === 'number' ? x : 有效控制器(g, x)))
+      .filter((x): x is number => typeof x === 'number');
+  }
   if (r.目标 !== undefined) {
     const t = item.目标槽?.[r.目标];
     // 指向「堆叠上的能力」的目标当不了受方 —— 直接当没有
@@ -2672,7 +3147,8 @@ function 解析受方(g: GameState, item: StackItem, r: any): (Obj | number)[] {
     return 斜对阵地(src阵地).map((s) => 敌.阵地[s]).filter((x): x is Obj => !!x);
   }
   if (r.selectAll) {
-    const 全 = 候选目标(g, item.操控者, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: r.selectAll }, item.来源 ?? item.card, undefined, undefined, 记忆宿主(item) ?? undefined)
+    // 触发受方也传下去：筛选里的「操控者:'该玩家'」靠它（081 牺牲该玩家的领土）
+    const 全 = 候选目标(g, item.操控者, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: r.selectAll }, item.来源 ?? item.card, false, item.触发受方, 记忆宿主(item) ?? undefined)
       .map((c) => c.obj ?? c.玩家!).filter((x) => x !== undefined);
     return r.个数 === undefined ? 全 : 全.slice(0, r.个数);
   }
@@ -2712,12 +3188,15 @@ function 记忆宿主(item: StackItem | null | undefined): Obj | null { return i
 /** 读效应暂存的记忆。⚠ 记忆挂在**宿主**上（见 `记忆宿主`），不是挂在堆叠项上 —— 堆叠项结算完就没了 */
 function 读记忆(item: StackItem | null, 键: string): unknown {
   if (!item) return undefined;
-  return 记忆宿主(item)?.记忆[键];
+  const 宿主 = 记忆宿主(item);
+  // 没有来源/牌的合成链（开局那种）用 item 自己的记忆
+  return 宿主 ? 宿主.记忆[键] : item.记忆?.[键];
 }
 /** 写效应暂存的记忆。宿主找不到就什么都不做（效应来源已经离场） */
 function 存记忆(g: GameState, item: StackItem, 键: string, 值: unknown): void {
   const 宿主 = 记忆宿主(item);
-  if (宿主) 写记忆(g, 宿主, 键, 值);
+  if (宿主) { 写记忆(g, 宿主, 键, 值); return; }
+  (item.记忆 ??= {})[键] = 值;
 }
 
 /** 120.4：一个伤害事件，多个受方 */
@@ -2759,15 +3238,29 @@ let 替代深度 = 0;
  *   · `来源: '自身'`（609.7）指**效应的来源** —— 奋迅那条是那张锦囊本身。
  *   静止式能力两者恰好是同一个物件，持续效应则常常不是（这就是 046 的关键）。
  */
+/**
+ * **替代/防止效应的受方判定**（614.1 / 616.1）—— 伤害与回复共用这一处。
+ * `受方判断` 由收集方给（静止式 = 它自己；持续 = 指定 / 受锁定 / 范围）。
+ * 省略 受方 = '自身'。不认识的写法**记日志并忽略**（不再静默当成“任意”）。
+ */
+function 替代受方命中(g: GameState, 受方: ReplacementSpec['替代']['受方'], 目标: Obj | number,
+  受方判断: (o: Obj) => boolean, 来源对象: Obj | null, 控制器: number): boolean {
+  const 受 = 受方 ?? '自身';
+  if (受 === '自身') return typeof 目标 !== 'number' && 受方判断(目标);
+  // 「你」= **那个玩家本人**（不是“你操控的东西” —— 那种要写 { selectAll: 筛选 操控者:'你' }）
+  if (受 === '你') return typeof 目标 === 'number' && 目标 === 控制器;
+  if (受 === '任意') return true;
+  if (typeof 受 === 'object' && 受 && 'selectAll' in 受) {
+    if (typeof 目标 === 'number' || !目标) return false;
+    return 符合选择器(g, 目标, 受.selectAll, 来源对象, 控制器, 有效特征(g, 目标));
+  }
+  记录(g, '替代性效应：不支持的受方写法 ' + JSON.stringify(受) + '，忽略这条');
+  return false;
+}
+
 function 替代适用于伤害(g: GameState, r: ReplacementSpec, 受方判断: (o: Obj) => boolean, 来源对象: Obj | null, 控制器: number, 条目: 伤害条目): boolean {
   if (r.替代.事件 !== '伤害' && r.替代.事件 !== '造成伤害') return false;
-  const 受 = r.替代.受方;
-  if (受 === '自身') {
-    if (typeof 条目.目标 === 'number' || !受方判断(条目.目标)) return false;
-  } else if (受 === '你') {
-    const 谁的 = typeof 条目.目标 === 'number' ? 条目.目标 : 有效控制器(g, 条目.目标);
-    if (谁的 !== 控制器) return false;
-  }
+  if (!替代受方命中(g, r.替代.受方, 条目.目标, 受方判断, 来源对象, 控制器)) return false;
   if (r.替代.来源 === '自身' && (!来源对象 || 条目.来源 !== 来源对象)) return false;   // 609.7
   // 「某个由你操控之**其他单位**的射击能力」（106 蒋钦）——
   //   其他 = 数据里的 `除:'自身'`的 `除:'自身'`（锚 = 效应来源 = 蒋钦自己；**数据不写** ✓）、
@@ -2815,6 +3308,8 @@ function 收集伤害替代效应(g: GameState, 条目: 伤害条目): 适用效
   for (const c of g.连续效应) {
     const 替 = c.载荷.替代;
     if (!替) continue;                             // 这条持续效应只有「层」那一半
+    // 611.2b「只要…」：条件不成立的持续效应不参与替代/防止（大乔离场后的那条就是这种）
+    if (c.条件 && !判断(g, c.控制器, c.条件 as Condition, c.来源 ?? undefined)) continue;
     // 持续效应：**受方对象**是它附着的那个物件（持续 op 带目标时就是那个目标 —— 046 奋迅），
     //   **来源对象**是效应的来源（那张锦囊）。两者常常不是同一个。
     // **受方判断**：这条持续效应作用到哪些物件。三种写法，从具体到一般：
@@ -2838,7 +3333,8 @@ function 收集伤害替代效应(g: GameState, 条目: 伤害条目): 适用效
   }
   // 702.6 坚韧 N：如果某来源将对此单位造成伤害，则防止其中的 N 点
   if (typeof 条目.目标 !== 'number') {
-    const 坚 = 词值(g, 条目.目标, '坚韧');
+    // 702.6d：多个坚韧**各自生效** → 按同名条目合计（坚韧2 + 坚韧1 = 每个来源各防 3 点）
+  const 坚 = 词值合计(g, 条目.目标, '坚韧');
     if (坚 > 0) {
       out.push({
         键: '坚韧#' + 条目.目标.uid, 持有者: 条目.目标,
@@ -2873,6 +3369,34 @@ function 按运算(前: number, 运: { 运算: string; 值: number }): number {
  * 返回改写后的数量；0 表示这个伤害事件根本不发生（120.9）。
  * 616.1f：选中的效应生效后，对剩余仍适用的效应重复此过程。
  */
+/** 614.1a：这个物件进场时是否被替代成「横置进场」（109 献帝） */
+function 进场须横置(g: GameState, o: Obj, 操控者: number): boolean {
+  for (const src of g.战场) {
+    if (src.面 === '暗置' || !有规则叙述(g, src)) continue;
+    for (const ab of (src.def.能力?.能力 ?? []) as StaticAbility[]) {
+      const r = ab.种类 === '静止式' ? ab.替代效应 : undefined;
+      if (!r || r.替代.事件 !== '进战场' || !r.进场横置) continue;
+      const 受 = r.替代.受方;
+      if (受 === '任意') return true;
+      if (!受 || 受 === '自身' || 受 === '你') continue;
+      if ('selectAll' in 受 && 符合选择器(g, o, 受.selectAll, src, 有效控制器(g, src), 有效特征(g, o))) return true;
+    }
+  }
+  void 操控者;
+  return false;
+}
+
+/** 场上有没有「不能回复体力」的替代效应（091 倾覆）—— 替代.事件 = '回复体力' */
+export function 不能回复体力(g: GameState): boolean {
+  for (const o of g.战场) {
+    if (o.面 === '暗置' || !有规则叙述(g, o)) continue;
+    for (const ab of (o.def.能力?.能力 ?? []) as StaticAbility[]) {
+      if (ab.种类 === '静止式' && ab.替代效应?.替代?.事件 === '回复体力') return true;
+    }
+  }
+  return false;
+}
+
 function 施加替代与防止(g: GameState, 条目: 伤害条目): number {
   if (替代深度 > 8) { 记录(g, '替代性效应递归过深，停止（护栏）'); return 条目.数量; }
   const 已用 = new Set<string>();          // 614.5：每个效应对每个事件只有一次机会
@@ -2900,6 +3424,14 @@ function 施加替代与防止(g: GameState, 条目: 伤害条目): number {
       数量 -= 实防;
       记录(g, 选.说明 + '：防止 ' + 实防 + ' 点伤害（剩 ' + 数量 + '）');
       continue;
+    }
+    if (r.改为失去体力 && typeof 条目.目标 === 'number') {
+      // 013：伤害改为失去体力（扣体力，不触发「受到伤害」）
+      const pl = g.players[条目.目标]!;
+      pl.体力 = Math.max(0, pl.体力 - 数量);
+      记录(g, 选.说明 + '：' + pl.name + ' 改为失去 ' + 数量 + ' 点体力（不是伤害）');
+      数量 = 0;
+      break;
     }
     if (r.数量) {                          // 614.1e
       const 前 = 数量;
@@ -3082,6 +3614,17 @@ export function 排队关键词触发(g: GameState, o: Obj, 时机: '结束步�
 
 
 
+/**
+ * **所有弃牌路径都走 `弃牌` 操作**（601.2f 打出费用 / 602.1d 启动费用 / 514 弃牌步骤）。
+ * 已经选好的牌放进 `本次选择`，op 就只做「移墓 + 记事件 + 派发触发 + 日志」，不再问玩家。
+ * `标签` 只是日志里的缘由（'（打出费用，601.2f）' 这种）。
+ */
+export function 走弃牌操作(g: GameState, p: number, 牌们: Obj[], 标签?: string): void {
+  if (!牌们.length) return;
+  const 假 = { 操控者: p, 本次选择: [...牌们], 标签 } as unknown as StackItem;
+  执行一步(g, 假, { 操作: '弃牌', 玩家: p, 数量: 牌们.length, 标签 } as ResolveStep);
+}
+
 export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep): void {   // 导出：给 '_探支付门.mjs' 做单步测试 ✓
   // 「若如此做」——只有**前一条效应真的生效了**才执行这一条（047 甘夫人 / 130 峨嵋祭酒）。
   //   每条效应开始时先把标志清成 false，由真正做了事的操作置回 true。
@@ -3092,7 +3635,12 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       const 需前一 = (步骤 as { 若前一效应生效?: boolean }).若前一效应生效;
       const 上一步 = item.上一步生效 === true;
   if (需前一 !== undefined && 需前一 !== 上一步) { item.上一步生效 = false; return; }
-  item.上一步生效 = false;
+  // ⚠ 这一步的「你可以」门答过之后，op 还可能挂起（弃牌要选牌）→ 再进来时不能把答案清掉，
+  //   否则「若如此做」的下一步会以为没做（014 弃牌换神速就踩了这个）。
+  {
+    const 门存 = item as unknown as { 门答于?: number; 门答值?: boolean };
+    item.上一步生效 = 门存.门答于 === item.步骤游标 ? 门存.门答值 === true : false;
+  }
   /**
    * ⚠ **「你可以……」= 某一步可选** ✓（063 孙乾"你可以将这些牌各置入其拥有者的墓地"✓）。
    *
@@ -3103,7 +3651,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
    *   · 选"不要" → **跳过这一步** ✓（`上一步生效` 保持 false ✓ → 后面 `若前一效应生效:false` 接上 ✓）；
    *   · 选"要" → 照常执行 ✓，并先记 `上一步生效 = true` ✓（"若如此做"分支靠它 ✓）。
    */
-  if ((步骤 as { 可选?: boolean }).可选 === true) {
+    if ((步骤 as { 可选?: boolean }).可选 === true && 步骤.操作 !== '条件执行') {
     // ⚠ **门要记住"这一步答过了"** ✗→✓（2026-10「确认后又回来」）
     //   以前门每次重进都再问一次 ✓，而 op 的答案（支付源）会被门吞掉/或门反复问 ✓。
     //   标记按 **步骤游标** 记 ✓：换一步就是新门 ✓。
@@ -3111,14 +3659,18 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
     if (门标.门答于 !== item.步骤游标) {
       const 答 = 门标.本次门;
       if (答 === undefined) {
-        item.待选择 = { 类型: '选', 选什么: '选项', 玩家: item.操控者,
-          标签: '你可以这样做：（这一步）', 数量: { 最小: 1, 最大: 1 },
+        const 问谁的 = (步骤 as { 问谁?: RecipientRef }).问谁;
+        item.待选择 = { 类型: '选', 选什么: '选项',
+          玩家: 问谁的 !== undefined ? (解析玩家们(g, item, 问谁的)[0] ?? item.操控者) : item.操控者,
+          标签: (步骤 as { 标签?: string }).标签 ?? '你可以这样做：（这一步）', 数量: { 最小: 1, 最大: 1 }, 门: true,
           候选: [{ 键: '接受', 名称: '这样做' }, { 键: '放弃', 名称: '不这样做' }] };
         return;
       }
       门标.本次门 = undefined;
       门标.门答于 = item.步骤游标;
       const 不做 = !Array.isArray(答) || 答.length === 0 || 答[0] === '放弃';
+      // 记下「答了什么」—— op 挂起再回来时，上一步生效 要能恢复成这个答案（见 执行一步 开头）
+      (门标 as unknown as { 门答值?: boolean }).门答值 = !不做;
       if (不做) return;
       item.上一步生效 = true;
     }
@@ -3128,7 +3680,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       // 119：失去体力**不是伤害** —— 不走伤害事件，所以 615 防止、702.6e 坚韧都管不了它
       const 失量 = typeof 步骤.数量 === 'number' ? 步骤.数量 : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
       for (const t of 解析受方(g, item, 步骤.目标)) {
-        if (typeof t === 'number') { const pl = g.players[t]!; pl.体力 -= 失量; 记录(g, pl.name + ' 失去 ' + 失量 + ' 点体力'); }
+        if (typeof t === 'number') { const pl = g.players[t]!; pl.体力 -= 失量; 记事件(g, '失去体力', { 受方: t, 数量: 失量 }); 记录(g, pl.name + ' 失去 ' + 失量 + ' 点体力'); }
         else { 写伤害(g, t, t.damage + 失量); 记录(g, t.def.全名 + ' 失去 ' + 失量 + ' 点体力（已损失 ' + t.damage + '）'); }
       }
       break;
@@ -3148,6 +3700,8 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
           : (typeof 步骤.数量 === 'object' && 步骤.数量 !== null) ? 取值(g, item.操控者, 步骤.数量 as Value, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X)
           : (步骤.数量 === 'X' ? 0 : 步骤.数量);   // 「回复 X 点」现在没有卡用，按 0
         for (const t2 of 解析受方(g, item, 步骤.目标)) {
+          // 091 倾覆：「单位和玩家不能回复体力」= 一条替代效应（事件 = 回复体力）
+          if (不能回复体力(g)) { 记录(g, (typeof t2 === 'number' ? g.players[t2]!.name : (t2 as Obj).def.全名) + ' 不能回复体力（091）'); continue; }
           if (typeof t2 === 'number') {
             const pl = g.players[t2]!;
             const 前 = pl.体力;
@@ -3192,25 +3746,30 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       //   ⚠ 走通用的「为这一步选」：挂起 → 答复进 本次选择 → 本步重跑 → 在这里用掉。
       const p = 解析玩家们(g, item, 步骤.玩家)[0];
       if (p === undefined) { 记录(g, '选择牺牲：找不到那个玩家'); break; }
+      const 需 = typeof (步骤 as { 数量?: number }).数量 === 'number' ? (步骤 as { 数量: number }).数量 : 1;
       if (item.本次选择) {
-        const t = item.本次选择[0];
+        const 选 = item.本次选择.filter((t): t is Obj => !!t && typeof t !== 'number' && typeof t !== 'string');
         item.本次选择 = undefined;
-        if (t !== undefined && typeof t !== 'number' && typeof t !== 'string') { 牺牲(g, t); item.上一步生效 = true; }
+        for (const t of 选.slice(0, 需)) 牺牲(g, t);
+        item.上一步生效 = 选.length >= 需;
         break;
       }
       const 源 = item.来源 ?? item.card;
     const 可牺 = g.战场.filter((x) => 有效控制器(g, x) === p
       && (!步骤.除自身 || x !== 源)
-      && (!步骤.筛选 || 符合筛选(g, x, 步骤.筛选, 有效特征(g, x))));
+      && (!步骤.筛选 || 符合筛选(g, x, 步骤.筛选, 有效特征(g, x), undefined, undefined, undefined, 有效控制器(g, x), item.触发受方)));
       // 「若你无法如此做」（157 吕布）：没牺牲成 → 上一步**没生效**，后面的步骤才走 若前一效应生效:false
-    if (可牺.length === 0) { 记录(g, g.players[p]!.name + ' 没有可牺牲的单位'); item.上一步生效 = false; break; }
+    if (可牺.length < 需) { 记录(g, g.players[p]!.name + ' 没有足够的单位可牺牲（要 ' + 需 + '，只有 ' + 可牺.length + '）'); item.上一步生效 = false; break; }
       // ⚠ **只有一个也照问** —— 就算只有一个选择也保留选择动作。
-      item.待选择 = { 类型: '选', 选什么: '物件', 标签: '选择一个单位牺牲', 玩家: p,
-        候选: 可牺.map((c) => ({ 键: c.uid, 名称: c.def.全名 })), 数量: { 最小: 1, 最大: 1 } };
+      item.待选择 = { 类型: '选', 选什么: '物件', 标签: '选择要牺牲的' + (需 > 1 ? ' ' + 需 + ' 个' : '一个'), 玩家: p,
+        候选: 可牺.map((c) => ({ 键: c.uid, 名称: c.def.全名 })), 数量: { 最小: 需, 最大: 需 } };
       return;
     }
     case '牺牲': {
-      for (const t of 解析受方(g, item, 步骤.目标)) {
+      // 可选的数量上限（081「牺牲**两个**领土」）—— 省略 = 全部（老语义）
+      const 限 = typeof (步骤 as { 数量?: number }).数量 === 'number' ? (步骤 as { 数量: number }).数量 : Infinity;
+      const 牺牲名单 = 解析受方(g, item, 步骤.目标);
+      for (const t of (限 === Infinity ? 牺牲名单 : 牺牲名单.slice(0, 限))) {
         if (typeof t === 'number' || t.区域 !== '战场') continue;
         牺牲(g, t);
       }
@@ -3221,15 +3780,72 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       const 号 = 解析玩家们(g, item, 步骤.玩家)[0]!;
       const pl = g.players[号]!;
       if (item.本次选择) {
-        for (const t of item.本次选择) if (t && typeof t !== 'number' && typeof t !== 'string') { 移到区域(g, t, '墓地'); 记录(g, pl.name + ' 弃掉 ' + t.def.全名); }
+        const 弃们 = item.本次选择.filter((t) => t && typeof t !== 'number' && typeof t !== 'string') as unknown as Obj[];
+        for (const t of 弃们) { 移到区域(g, t, '墓地'); 记事件(g, '弃牌', { 受方: t.uid }); 排队弃牌触发(g, 号, t); 记录(g, pl.name + ' 弃掉 ' + t.def.全名 + ((步骤 as { 标签?: string }).标签 ?? '')); }
+        if ((步骤 as { 记到?: string }).记到) 存记忆(g, item, (步骤 as { 记到: string }).记到, 弃们);
         item.本次选择 = undefined;
         break;
       }
       const 要弃 = Math.min(步骤.数量, pl.hand.length);
       if (要弃 === 0) { 记录(g, pl.name + ' 没有手牌可弃'); break; }
+      // 「随机弃」（群星 099「随机弃一张牌」）：由随机源挑，不让玩家选
+      if ((步骤 as { 随机?: boolean }).随机) {
+        for (let k = 0; k < 要弃; k++) {
+          const i2 = Math.floor(g.随机源() * pl.hand.length);
+          const c = pl.hand[i2];
+          if (!c) break;
+          移到区域(g, c, '墓地');
+          记事件(g, '弃牌', { 受方: c.uid });
+          排队弃牌触发(g, 号, c);
+          if ((步骤 as { 记到?: string }).记到) 存记忆(g, item, (步骤 as { 记到: string }).记到, [c]);
+          记录(g, pl.name + ' 随机弃掉 ' + c.def.全名);
+        }
+        break;
+      }
       // ⚠ 弃哪几张**由该玩家自己选** —— 以前是直接从手牌末尾拿（写死的「简化」，等于没选）。
       item.待选择 = { 类型: '选', 选什么: '物件', 标签: '选 ' + 要弃 + ' 张手牌弃掉', 玩家: 号,
         候选: pl.hand.map((c) => ({ 键: c.uid, 名称: c.def.全名 })), 数量: { 最小: 要弃, 最大: 要弃 } };
+      return;
+    }
+    case '允许打出': {
+      // 「本回合中，你可以打出该牌」（045）：登记一张**在放逐区**的牌，本回合内可当手牌打出
+      for (const t of 解析受方(g, item, 步骤.目标)) {
+        if (typeof t === 'number') continue;
+        (g.本回合可打出 ??= []).push({ uid: t.uid, 回合: g.turn });
+        记录(g, t.def.全名 + ' 本回合中可以被打出（来自 045 诸葛亮的授权）');
+      }
+      break;
+    }
+    case '判定': {
+      /**
+       * 701.25：展示该玩家牌库顶牌作为判定牌。
+       *  - 空库 → 判定牌信息未定义（记为 null），后续条件全 false；
+       *  - 之前已经判定过一次 → 先把旧的按 701.25a 收尾（还在顶就置底）；
+       *  - 展示期间公开（g.判定中），收尾在 收尾堆叠项 里做。
+       */
+      // 双方确认完毕（展示的答案永远是 []，所以用 !== undefined 判，不能看真值）
+      if (item.本次选择 !== undefined) { item.本次选择 = undefined; item.上一步生效 = true; break; }
+      const 谁 = 步骤.玩家 !== undefined ? (解析玩家们(g, item, 步骤.玩家)[0] ?? item.操控者) : item.操控者;
+      收尾判定(g, item);
+      const 库 = g.players[谁]!.library;
+      if (!库.length) {
+        item.判定牌 = null as unknown as Obj;
+        item.判定主 = 谁;
+        g.判定中 = null;
+        记录(g, g.players[谁]!.name + ' 判定：牌库是空的（判定牌信息未定义，701.25b）');
+        break;
+      }
+      const 牌 = 库[库.length - 1]!;
+      item.判定牌 = 牌;
+      item.判定主 = 谁;
+      g.判定中 = { uid: 牌.uid };
+      记录(g, g.players[谁]!.name + ' 判定：' + 牌.def.全名 + '（判定牌，公开）');
+      // 701.25a：判定**先展示**这张牌，双方确认后才继续（和 展示 同一条路：等双方确认）
+      item.待选择 = { 类型: '选', 选什么: '物件', 玩家: item.操控者,
+        标签: '判定：' + 牌.def.全名 + '（双方确认后继续）',
+        数量: { 最小: 0, 最大: 0 },
+        候选: [{ 键: 牌.uid, 名称: 牌.def.全名, 区: '牌库' }],
+        等双方确认: true };
       return;
     }
     case '展示': {
@@ -3249,14 +3865,29 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       } else {
         for (const p of 解析玩家们(g, item, 步骤.玩家)) {
           const pl = g.players[p]!;
-          const n = Math.min(步骤.数量 ?? 0, pl.library.length);
-          const 顶 = pl.library.slice(-n).reverse();       // 牌库顶 → 往下 ✓
+          // 循环里「接着展示」：跳过已经记在 `跳过记忆` 里的牌，看下一张没展示过的
+          const 已见 = 步骤.跳过记忆 ? 读记忆(item, 步骤.跳过记忆) : undefined;
+          const 已见uid = new Set((Array.isArray(已见) ? 已见 as Obj[] : []).map((x) => x.uid));
+          const 池 = 已见uid.size ? pl.library.filter((c) => !已见uid.has(c.uid)) : pl.library;
+          const n = Math.min(步骤.数量 ?? 0, 池.length);
+          const 顶 = 池.slice(-n).reverse();       // 牌库顶 → 往下 ✓
           牌们.push(...顶);
           const 见 = 顶.map((c) => c.def.全名);
           记录(g, pl.name + ' 展示牌库顶 ' + n + ' 张：' + (见.join('、') || '（牌库空）'));
         }
       }
+      if (!牌们.length) { item.上一步生效 = false; break; }   // 没牌可展示（循环里据此停）
       if (牌们.length) {
+        item.上一步生效 = true;                 // 「若如此做」：展示成功就算生效
+        // `记到`：**追加**进记忆（循环里一轮展示 1 张就会累积成一叠）
+        if (步骤.记到) {
+          const 旧 = 读记忆(item, 步骤.记到);
+          const 列 = Array.isArray(旧) ? (旧 as Obj[]) : [];
+          列.push(...牌们);
+          存记忆(g, item, 步骤.记到, 列);
+        }
+        // 循环里逐张展示：不逐张暂停（循环结束后再统一展示一次）
+        if (步骤.等双方确认 === false) break;
         item.待选择 = { 类型: '选', 选什么: '物件', 玩家: item.操控者,
           标签: '展示：' + 牌们.map((c) => c.def.全名).join('、') + '（双方确认后继续）',
           数量: { 最小: 0, 最大: 0 },
@@ -3267,6 +3898,8 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       break;
     }
     case '搜寻': {
+      // 103 古铜镇尺：「玩家不能搜寻牌库」
+      if (有限制(g, item.操控者, '搜寻')) { 记录(g, '搜寻被禁止（103 古铜镇尺），跳过'); break; }
       // ⚠ 玩家可以是**引用**（「目标玩家的牌库顶」✓）—— 与 检视 同口径 ✓（701.17a：搜寻先检视 ✓）
       const pl = g.players[(步骤.玩家 === undefined ? item.操控者 : (解析玩家们(g, item, 步骤.玩家)[0] ?? item.操控者))]!;
       const 区域 = 步骤.从 ?? ['牌库'];
@@ -3376,6 +4009,14 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       item.暂存 = undefined;        // 全部处理完 ✓（中途挂起时上面已经把剩余存回去了 ✓）
       break;
     }
+    case '费用减免': {
+      // 034：本回合打出的下一张符合筛选的牌减 N（打出后由 施放 消耗）
+      for (const p2 of 解析玩家们(g, item, 步骤.玩家)) {
+        g.临时费用修正 = [...(g.临时费用修正 ?? []), { 玩家: p2, 筛选: 步骤.筛选, 减: 步骤.减 }];
+        记录(g, g.players[p2]!.name + ' 本回合打出的下一张牌减 ' + 步骤.减 + ' 点（034）');
+      }
+      break;
+    }
     case '限制玩家': {
       const p = typeof 步骤.玩家 === 'number' ? 步骤.玩家 : (item.目标槽?.[步骤.玩家.目标] as number | undefined);
       if (typeof p !== 'number') { 记录(g, '限制玩家：目标不是玩家，什么也不发生'); break; }
@@ -3396,9 +4037,11 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       break;
     }
     case '磨牌': {
+      const 磨数 = typeof 步骤.数量 === 'number' ? 步骤.数量
+        : 取值(g, item.操控者, 步骤.数量, item.来源 ?? item.card ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
       for (const p of 解析玩家们(g, item, 步骤.玩家)) {
         const pl = g.players[p]!;
-        const n = Math.min(步骤.数量, pl.library.length);
+        const n = Math.min(磨数, pl.library.length);
         for (let i = 0; i < n; i++) { const c = pl.library[pl.library.length - 1]!; 移到区域(g, c, '墓地'); }
         记录(g, pl.name + ' 将牌库顶 ' + n + ' 张置入墓地');
       }
@@ -3500,7 +4143,8 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
         条件 = { 操作: '附属在', 目标: String(typeof t === 'number' ? t : (t?.uid ?? '')) };
       }
       // 611.2a：**没有列出时间段 → 生效直到游戏结束**
-      const 时长 = 步骤.时长 === '直到回合结束' ? '直到回合结束' : '直到游戏结束';
+      const 时长 = 步骤.时长 === '直到回合结束' ? '直到回合结束'
+        : 步骤.时长 === '下一次重置步骤' ? '下一次重置步骤' : '直到游戏结束';
       let 指定: number | undefined;
       let 受锁定: number[] | undefined;
       // 范围统一用 Selector（和 611.3 那条路一致），不再有单独的 作用 枚举
@@ -3563,9 +4207,13 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
           }
         }
       }
+      const 到期玩家 = 时长 === '下一次重置步骤'
+        ? (指定 !== undefined ? 有效控制器(g, 取实体(指定)!)
+          : (受锁定 && 受锁定.length ? 有效控制器(g, 取实体(受锁定[0]!)!) : (item.操控者 + 1) % g.players.length))
+        : undefined;
       加连续效应(g, {
         id: g.nextStackId++, 时间印记: g.nextStamp++, 来源: item.来源 ?? item.card ?? null,
-        控制器: item.操控者, 时长, 范围, 受锁定, 指定, 条件,
+        控制器: item.操控者, 时长, 范围, 受锁定, 指定, 条件, ...(到期玩家 !== undefined ? { 到期玩家 } : {}),
         // 载荷**两样都能带**（613.6）：给了哪样就带哪样，互不排斥
         载荷: { ...(步骤.层 ? { 层: 步骤.层 } : {}), ...(步骤.替代 ? { 替代: 步骤.替代 } : {}) },
       });
@@ -3706,13 +4354,115 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
     case '移动': {
       // 「若如此做」：这条移动找到了受方就算生效（047 甘夫人移回手牌那类）
       item.上一步生效 = true;
+      /**
+       * ── 去处 = `'阵地'`：单位在**战场上换位置**（原「移到阵地」并入这里）────────
+       *
+       * 目的地由 `阵地到` 给（固定名 / 相对 / 由选系统问）。
+       * 「问谁挑」= 步骤级 `问谁`（默认效应操控者）；「哪半场的空阵地可点」= 被移动单位的操控者。
+       * 这两个概念拆开之后，塞外蛮族那种「对手替你挑你半场的空阵地」才写得干净。
+       */
+      if (步骤.去处 === '阵地') {
+        const 目规 = (步骤 as { 阵地到?: 阵地目的地 }).阵地到;
+        if (!目规) { 记录(g, '移动（阵地）：卡数据没写 阵地到'); break; }
+        const 是位单位 = (x: 目标 | undefined): x is Obj =>
+          !!x && typeof x !== 'number' && !('堆叠项' in x) && 是类别(g, x as Obj, '单位');
+        // 与「移到阵地」同一口径：to 写 { 目标 } 时取**全部**目标，否则解析受方
+        const 走们: Obj[] = (步骤.to && typeof 步骤.to === 'object' && '目标' in 步骤.to)
+          ? (item.目标 ?? []).filter(是位单位)
+          : 解析受方(g, item, 步骤.to).filter(是位单位);
+        if (!走们.length) { 记录(g, '移动（阵地）：找不到单位'); break; }
+        const 进度键 = item as unknown as { 移到进度?: number };
+        const 进度 = 进度键.移到进度 ?? 0;
+        const 走 = 走们[进度];
+        if (!走) break;
+        /**
+         * 目的地那片**阵地属于谁**：
+         *   · 选阵地 = 移动单位自己的操控者（卡面都是「其操控者的空阵地」）；
+         *   · 相对   = 锚的**对面**那半场（相对阵地就是对面同名的阵地 —— 这里以前误写成锚的主，
+         *              结果张飞被放到对手半场，再被 301.8 搬回来，日志里多出一段“操控权与阵地不一致”）。
+         */
+        const 半场主 = (u: Obj): number => {
+          if ('相对' in 目规) {
+            const 锚 = 解析受方(g, item, 目规.相对).find((x): x is Obj => typeof x !== 'number');
+            const 锚主 = 锚 ? 阵地所有者(g, 锚) : null;
+            return 锚主 === null || 锚主 === undefined ? 有效控制器(g, u) : 1 - 锚主;
+          }
+          return 有效控制器(g, u);
+        };
+        const 谁挑 = 步骤.问谁 !== undefined ? (解析玩家们(g, item, 步骤.问谁)[0] ?? item.操控者) : item.操控者;
+        /** 「可以」不选：`阵地到.数量 {0,1}`，或步骤级 `可选`（老写法） */
+        const 名额 = 目规.数量
+          ?? ((步骤 as { 可选?: boolean }).可选 ? { 最小: 0, 最大: 1 } : { 最小: 1, 最大: 1 });
+        /** 给单位 u 挂一问「移到哪个空阵地」；返回 false = 没有空阵地 */
+        const 挂问 = (u: Obj): boolean => {
+          const 主 = 半场主(u);
+          const 空 = 阵地顺序.filter((s2) => !g.players[主]!.阵地[s2]);
+          if (!空.length) { 记录(g, '移动（阵地）：' + g.players[主]!.name + ' 没有空阵地'); return false; }
+          item.待选择 = { 类型: '选', 选什么: '阵地',
+            标签: '选择 ' + u.def.全名 + ' 移到哪个空阵地（' + g.players[主]!.name + ' 的空阵地）',
+            玩家: 谁挑, 阵地玩家: 主, 数量: 名额,
+            候选: 空.map((x) => ({ 键: x, 名称: x })) };
+          return true;
+        };
+        let 目的: 阵地 | null = null;
+        let 目的地主 = 半场主(走);
+        if ('相对' in 目规) {
+          const 锚 = 解析受方(g, item, 目规.相对).find((x): x is Obj => typeof x !== 'number');
+          if (!锚) { 记录(g, '移动（阵地）：找不到锚'); break; }
+          if (!锚.阵地) { 记录(g, '移动（阵地）：' + 锚.def.全名 + ' 不在阵地上'); break; }
+          目的 = 相对阵地(锚.阵地);
+          if (目的 === null) { 记录(g, '移动（阵地）：算不出相对阵地'); break; }
+          // 相对阵地 = **锚的对面那半场**（同名的格子），不是锚自己那半场
+          目的地主 = 半场主(走);
+        } else {
+          // ⚠ `本次选择` 为**空数组**也是“答过了”（玩家选了「不选」）；只有 undefined 才是“还没问”。
+          //   以前用长度判 → 放弃之后会**再问一遍**（空转）。
+          if (item.本次选择 === undefined) { if (!挂问(走)) break; return; }
+          const 答 = item.本次选择[0];
+          item.本次选择 = undefined;
+          if (答 === undefined && 名额.最小 === 0) { 记录(g, '移动（阵地）：没有选择阵地，不移动'); break; }
+          目的 = typeof 答 === 'string' ? (答 as 阵地) : null;
+          const 空 = 阵地顺序.filter((s2) => !g.players[目的地主]!.阵地[s2]);
+          if (目的 === null || !空.includes(目的)) { 记录(g, '移动（阵地）：选的目的地不合法'); break; }
+        }
+        if (目的 === null) { 记录(g, '移动（阵地）：目的地为空'); break; }
+        // ⚠ 两半场有同名阵地（左边路…）—— 只比名字会把「对方半场的中路」当成「自己已经在的中路」
+        if (走.阵地 === 目的 && 阵地所有者(g, 走) === 目的地主) 记录(g, 走.def.全名 + ' 已经在 ' + 目的);
+        else {
+          const 旧阵 = 走.阵地;
+          if (旧阵 !== null) g.players[阵地所有者(g, 走)!]!.阵地[旧阵] = null;
+          const 新主 = g.players[目的地主]!;
+          // 701.18c：目的地有单位 → **什么也不会发生**；066 释疑：相对阵地不空 → 取消此能力
+          const 原 = 新主.阵地[目的];
+          if (原) {
+            记录(g, '取消此能力：' + 目的 + ' 上有 ' + 原.def.全名 + '（701.16a / 066 释疑）');
+            item.步骤游标 = item.steps.length;
+            return;
+          }
+          写阵地(g, 走, 目的); 新主.阵地[目的] = 走;
+          记录(g, 走.def.全名 + ' 移动到 ' + 目的);
+          记事件(g, '移动', { 受方: 走.uid });          // 701.18
+          排队移动触发(g, 走);
+        }
+        进度键.移到进度 = 进度 + 1;
+        if (进度 + 1 < 走们.length) {
+          // 「**依次**移动至多两个」：还有下一个 —— 清掉答案、直接问它的目的地，本步重跑
+          item.本次选择 = undefined;
+          if (!挂问(走们[进度 + 1]!)) break;
+          return;
+        }
+        break;
+      }
+
       // 400.7：把一个或多个物件换个区域。
       //   **单个目标**用 步骤.to；**批量**（「将所有单位移回其拥有者手上」）用 步骤.selectAll。
       const 已洗入 = new Set<number>();
       // 「**目标玩家**的墓地」那种：批量候选算在**他**身上，不是效应操控者身上
       const 谁的 = 步骤.玩家 !== undefined ? (解析玩家们(g, item, 步骤.玩家)[0] ?? item.操控者) : item.操控者;
       const 批量 = 步骤.selectAll
-        ? 候选目标(g, 谁的, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: 步骤.selectAll }, item.来源 ?? item.card)
+    // ⚠ **移动不是“指定目标”**（115.10a：叙述里没有【目标】字样的挑牌不被 702.2b 抵抗 /
+    //   702.3b 洞察挡）—— 所以候选按 **是目标 = false** 算，和步骤里的「选」同一口径。
+    ? 候选目标(g, 谁的, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: 步骤.selectAll }, item.来源 ?? item.card, false)
             .map((c) => c.obj).filter((x): x is Obj => !!x)
             // 「**目标玩家**的墓地」要按**拥有者**收窄 —— 非战场区域的候选本来就是跨所有玩家的
             //   （063 孙乾那种「每个玩家的墓地」正需要那个宽度），所以在这里按 玩家 过滤。
@@ -3722,18 +4472,26 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       // ⚠ 认不出的目的地**不能静默当「手牌」** —— 卡数据里写错一个字符串，
       //   表现就是「移到牌库顶」变成「移回手上」，而且日志里一点痕迹都没有。
       //   【黑水祭天】模式 3 就是这么错的（写的是 '拥有者的牌库顶'）。
-      if (!['手牌', '牌库', '牌库顶', '墓地', '放逐区'].includes(步骤.去处)) {
+      if (!['手牌', '牌库', '牌库顶', '牌库底', '墓地', '放逐区'].includes(步骤.去处)) {
         记录(g, '⚠ 移动：未知的目的地「' + 步骤.去处 + '」—— 按「手牌」处理，请检查卡数据');
       }
       const 洗入 = 步骤.去处 === '牌库';
-      const 目的区: Zone = (步骤.去处 === '牌库顶' || 洗入) ? '牌库'
+  // 「置于牌库底」= 放进牌库后落到最底下（牌库末尾是顶、下标 0 是底）
+  const 到底 = 步骤.去处 === '牌库底';
+      const 目的区: Zone = (步骤.去处 === '牌库顶' || 洗入 || 到底) ? '牌库'
         : 步骤.去处 === '墓地' ? '墓地'
         : 步骤.去处 === '放逐区' ? '放逐区'
         : '手牌';                       // 默认「移回其拥有者手上」（400.3：进拥有者那边）
       const 搬 = (t: Obj) => {
         const 曾战场 = t.区域 === '战场';
         移到区域(g, t, 目的区);
-        记录(g, t.def.全名 + (目的区 === '手牌' ? ' 被移回其拥有者手上' : 目的区 === '牌库' ? ' 被置于其拥有者的牌库顶' : 目的区 === '墓地' ? ' 被置于其拥有者的墓地' : ' 被放逐'));
+        if (到底) {
+          // 移到区域 把它放进牌库末尾（= 顶）；「置于牌库底」再挪到下标 0（牌库末尾是顶、0 是底）
+          const lib = g.players[t.owner]!.library;
+          const i2 = lib.indexOf(t);
+          if (i2 >= 0) { lib.splice(i2, 1); lib.unshift(t); }
+        }
+        记录(g, t.def.全名 + (目的区 === '手牌' ? ' 被移回其拥有者手上' : 到底 ? ' 被置于其拥有者的牌库底' : 目的区 === '牌库' ? ' 被置于其拥有者的牌库顶' : 目的区 === '墓地' ? ' 被置于其拥有者的墓地' : ' 被放逐'));
         // 701.18c：移动**不是死去**（700.4 只认「从战场进墓地」），所以只记「离开战场」
         if (曾战场) 记事件(g, '离开战场', { 受方: t.uid });
         // 701.20「洗入牌库」：先进去，再整体洗 —— 位置随机化由洗牌统一负责
@@ -3741,24 +4499,39 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       };
       if (批量) { for (const x of 批量) 搬(x); for (const p2 of 已洗入) 洗牌(g.players[p2]!.library, g.随机源); break; }
       // to 可以是 { 目标: '槽名' }（按目标槽取），也可以是 RecipientRef（{ref:'自身'} 等）
-      const t = !步骤.to ? undefined
-        : ('目标' in 步骤.to ? 取实体(item.目标槽?.[步骤.to.目标]) : (解析受方(g, item, 步骤.to)[0] as Obj | undefined));
-      if (!t) { 记录(g, '移动：找不到目标'); break; }
-      搬(t);
+      // ⚠ `{ 目标 }` 是单数（目标槽只有一个）；其余 RecipientRef **全部**搬 ——
+      //   `{ 选: …, 数量:{2,2} }` 就是「选两张一起移回手上」（021 夏侯渊）。
+      const 受方们: Obj[] = !步骤.to ? []
+        : ('目标' in 步骤.to
+          ? [取实体(item.目标槽?.[步骤.to.目标])].filter((x): x is Obj => !!x)
+          : 解析受方(g, item, 步骤.to).filter((x): x is Obj => typeof x !== 'number'));
+      if (!受方们.length) { 记录(g, '移动：找不到目标'); break; }
+      for (const t of 受方们) 搬(t);
       for (const p3 of 已洗入) 洗牌(g.players[p3]!.library, g.随机源);
       break;
     }
     case '记住': {
-      // 「记住」一个东西 —— 数字属性或一个玩家号（效应之间的变量）
-      const 谁 = 解析受方(g, item, 步骤.从)[0];
+      // 「记住」一个东西 —— 省略 `取` = 记住**物件本身**；给了 `取` = 记它的某个数值/玩家号
+      const 们 = 解析受方(g, item, 步骤.从);
+      if (!步骤.取) {
+        const 物件们 = 们.filter((x): x is Obj => typeof x !== 'number');
+        if (!物件们.length) { 记录(g, '记住：解析不到受方'); break; }
+        存记忆(g, item, 步骤.键, 物件们.length === 1 ? 物件们[0] : 物件们);
+        记录(g, '记住 ' + 物件们.map((x) => x.def.全名).join('、'));
+        break;
+      }
+      const 谁 = 们[0];
       if (谁 === undefined) { 记录(g, '记住：解析不到受方'); break; }
       if (步骤.取 === '玩家号') { if (typeof 谁 === 'number') { 存记忆(g, item, 步骤.键, 谁); 记录(g, '记住 ' + g.players[谁]!.name); } }
       else if (typeof 谁 !== 'number') {
         const d = 谁.def;
-        const n = 步骤.取 === '武力' ? 武力(g, 谁)
-          : 步骤.取 === '体力上限' ? 体力上限(g, 谁)
-          : 步骤.取 === '打出费用' ? (typeof d.打出费用 === 'number' ? d.打出费用 : 0)
-          : 谁.damage;
+        let n: number;
+        if (步骤.取 === '武力') n = 武力(g, 谁);
+        else if (步骤.取 === '体力上限') n = 体力上限(g, 谁);
+        else if (步骤.取 === '打出费用') n = typeof d.打出费用 === 'number' ? d.打出费用 : 0;
+        // 「费用值」= 牌面费用值（打出费用可能是费用行为数组；X 按 0）
+        else if (步骤.取 === '费用值') { const v = 牌面费用值(d.打出费用); n = v === 'X' ? 0 : v; }
+        else n = 谁.damage;
         存记忆(g, item, 步骤.键, n);
         记录(g, '记住 ' + 谁.def.全名 + ' 的' + 步骤.取 + ' = ' + n);
       }
@@ -3780,7 +4553,20 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       // ⚠ 「展示」与「分去处」在规则上是**两件事** ✓（牌数据里各写各的 ✓）——
       //   这里只做"翻+分" ✓；摊面板/双方确认是**展示那个 op** 的事 ✓（别在这里绑 ✗）。
       const pl2 = g.players[p]!;
-      const n2 = Math.min(步骤.数量, pl2.library.length);
+      const 全库 = pl2.library.length;
+    let n2 = 全库;
+    if (步骤.数量 === '直到') {
+      const 条 = 步骤.直到 ?? { 张数: 1 };
+      let 数 = 0; n2 = 0;
+      for (let i = 全库 - 1; i >= 0; i--) {
+        n2++;
+        if (!条.筛选 || 符合筛选(g, pl2.library[i]!, 条.筛选, 有效特征(g, pl2.library[i]!))) 数++;
+        if (数 >= 条.张数) break;
+      }
+      记录(g, '翻牌库顶（直到 ' + 条.张数 + ' 张' + (条.筛选 ? '符合筛选的' : '') + '）：共 ' + n2 + ' 张');
+    } else {
+      n2 = Math.min(步骤.数量, 全库);
+    }
       const 翻 = pl2.library.slice(-n2).reverse();          // 顶在末尾 → 反转成从上到下
       for (const c of 翻) {
         // 按顺序找第一条命中的分流规则（没写 筛选 的当兜底）
@@ -3803,6 +4589,19 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
     } break;
     case '决斗': {
       // 701.10：两个单位互殴。**语义在这里只有一份**（卡片数据不再手写两条 伤害 事件）。
+      if (步骤.逐个) {
+        // 036：甲 = 一批单位；每个都跟**以它为锚**解析出来的乙 决斗
+        for (const a of 解析受方(g, item, 步骤.甲)) {
+          if (typeof a === 'number') continue;
+          const 子 = { ...item, 来源: a } as StackItem;
+          const b = 解析受方(g, 子, 步骤.乙).find((x): x is Obj => typeof x !== 'number');
+          if (!b || a === b) continue;
+          if (a.区域 !== '战场' || b.区域 !== '战场' || !是类别(g, a, '单位') || !是类别(g, b, '单位')) continue;
+          记录(g, a.def.全名 + ' 与 ' + b.def.全名 + ' 决斗（701.10）');
+          伤害事件(g, null, [{ 目标: a, 数量: 武力(g, b) }, { 目标: b, 数量: 武力(g, a) }]);
+        }
+        break;
+      }
       const 解斗 = (r: RecipientRef) => 解析受方(g, item, r).find((x): x is Obj => typeof x !== 'number');
       const 甲 = 解斗(步骤.甲); const 乙 = 解斗(步骤.乙);
       // 701.10b：任一方已不在战场 / 不再是单位 → 没有决斗，也没有伤害
@@ -3823,102 +4622,13 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       ]);
       break;
     }
-    case '移到阵地': {
-      // 301.7：把单位挪到另一个阵地。301.9：目标阵地被占 → 替任（放逐原单位）。
-      // 目的地两种写法（见 types）：
-      //   · `相对`  —— 算出来的（某个单位的相对阵地）；
-      //   · `阵地`  —— **由玩家挑**一个空阵地（087 调虎离山）；解析出多个单位时**依次**各问一次。
-      // ⚠ 「至多两个目标」要拿到**全部**：目标槽[名字] 只存一个（那是给「该目标」这类单数引用用的），
-      //   多目标在 item.目标 上是**一整列**。所以 to 写 { 目标: 名字 } 时直接读那一列。
-      const 是单位 = (x: 目标 | undefined): x is Obj =>
-        !!x && typeof x !== 'number' && !('堆叠项' in x) && 是类别(g, x as Obj, '单位');
-      const 走们: Obj[] = (步骤.to && typeof 步骤.to === 'object' && '目标' in 步骤.to)
-        ? (item.目标 ?? []).filter(是单位)
-        : 解析受方(g, item, 步骤.to).filter(是单位);
-      if (!走们.length) { 记录(g, '移到阵地：找不到单位'); break; }
-      // 「依次」靠**挂起重跑同一步**来循环：进度存在 item 上，全部走完才推进游标。
-      const 进度 = (item as unknown as { 移到进度?: number }).移到进度 ?? 0;
-      const 走 = 走们[进度];
-      if (!走) break;
-      let 目的: 阵地 | null = null;
-      let 新主号 = item.操控者;
-      if (步骤.空阵地 !== undefined) {
-        const 它主 = 有效控制器(g, 走);
-        // '其操控者' = 那个单位自己的操控者（阵地所有者 一直就在算这个）
-        const 谁的 = 步骤.空阵地 === '对手' ? 1 - 它主 : 它主;
-        const 空 = 阵地顺序.filter((s2) => !g.players[谁的]!.阵地[s2]);
-        if (!空.length) { 记录(g, '移到阵地：' + g.players[谁的]!.name + ' 没有空阵地'); break; }
-        // ⚠ 空数组**不算答案**（那是「还没问」）—— 用长度判，别用真值判
-        if (!item.本次选择 || !item.本次选择.length) {
-          item.待选择 = {
-            类型: '选', 选什么: '阵地',
-            标签: '选择 ' + 走.def.全名 + ' 移到哪个空阵地（' + g.players[谁的]!.name + '  的空阵地）',
-            玩家: 步骤.由谁选 === '对手' ? 1 - item.操控者 : item.操控者,
-            数量: 步骤.可选 ? { 最小: 0, 最大: 1 } : { 最小: 1, 最大: 1 },
-            候选: 空.map((x) => ({ 键: x, 名称: x })),
-          };
-          return;                       // 挂起：由 应用选择 把答案写进 本次选择，本步重跑
-        }
-        const 选 = item.本次选择[0];
-        // 「你可以…」那一问答了「不选」→ 这一步什么都不发生（151 塞外蛮族）
-        if (选 === undefined && 步骤.可选) { 记录(g, '移到阵地：' + g.players[步骤.由谁选 === '对手' ? 1 - item.操控者 : item.操控者]!.name + ' 没有选择阵地，不移动'); break; }
-        item.本次选择 = undefined;
-        目的 = typeof 选 === 'string' ? (选 as 阵地) : null;
-        if (目的 === null || !空.includes(目的)) { 记录(g, '移到阵地：选的目的地不合法'); break; }
-        新主号 = 谁的;                   // 空阵地是**谁**的，就由谁占（087：其操控者）
-      } else {
-        const 锚 = 解析受方(g, item, 步骤.相对!).find((x): x is Obj => typeof x !== 'number');
-        if (!锚) { 记录(g, '移到阵地：找不到锚'); break; }
-        if (!锚.阵地) { 记录(g, '移到阵地：' + 锚.def.全名 + ' 不在阵地上'); break; }
-        目的 = 相对阵地(锚.阵地);
-        if (目的 === null) { 记录(g, '移到阵地：算不出相对阵地'); break; }
-      }
-      if (走.阵地 === 目的) { 记录(g, 走.def.全名 + ' 已经在 ' + 目的); } else {
-        // 摘掉自己原来的阵地
-        const 旧阵 = 走.阵地;
-        if (旧阵 !== null) {
-          const 旧主 = g.players[阵地所有者(g, 走)!]!;
-          旧主.阵地[旧阵] = null;
-        }
-        const 新主 = g.players[新主号]!;
-        // ⚠ **701.18c**：替任只在单位**进战场**时发生 —— 「如果一个单位将移动到一个其上有
-        //   单位的阵地，则**什么也不会发生**」。所以这里不做替任，直接不移动。
-        //   （301.9 管的是「将在某阵地**进战场**」；701.22c 也明说「离开战场后再进场」不是移动。）
-        const 原 = 新主.阵地[目的];
-        if (原) {
-        // ★ 释疑（066 张飞）：「如果该单位的相对阵地**有单位**，则**取消此能力**」✓
-        //   701.16a 取消 = 把能力移出堆叠并置入墓地 → **整条效应链都不再执行** ✗
-        //   （以前只记 701.18c「什么也不会发生」✗ 且只 break 这一步 ✗ → 后面若还有效应会照跑 ✗）
-        记录(g, '取消此能力：' + 目的 + ' 上有 ' + 原.def.全名 + '（相对阵地不空，701.16a / 066 释疑）');
-        item.步骤游标 = item.steps.length;   // 中止整条链 ✓
-        return;
-      }
-        写阵地(g, 走, 目的);
-        新主.阵地[目的] = 走;
-        记录(g, 走.def.全名 + ' 移动到 ' + 目的);
-        记事件(g, '移动', { 受方: 走.uid });          // 701.18
-        排队移动触发(g, 走);
-      }
-      (item as unknown as { 移到进度?: number }).移到进度 = 进度 + 1;
-      if (进度 + 1 < 走们.length) {
-        // 「**依次**移动至多两个」：还有下一个 —— 把答案清掉、**直接问它的目的地**，
-        //   并让本步重跑（挂起 → 游标不推进）。⚠ 不要挂一个「空问题」来循环：
-        //   空问题回来的是**空数组**，会被误当成「答案是空的」→ 判成目的地不合法。
-        const 下 = 走们[进度 + 1]!;
-        const 它的主 = 有效控制器(g, 下);
-        const 谁的下 = 步骤.空阵地 === '对手' ? 1 - 它的主 : 它的主;
-        const 空的下 = 阵地顺序.filter((s2) => !g.players[谁的下]!.阵地[s2]);
-        if (!空的下.length) { 记录(g, '移到阵地：' + g.players[谁的下]!.name + ' 没有空阵地，剩下不动'); break; }
-        item.本次选择 = undefined;
-        item.待选择 = {
-          类型: '选', 选什么: '阵地',
-          标签: '选择 ' + 下.def.全名 + ' 移到哪个空阵地（' + g.players[谁的下]!.name + ' 的空阵地）',
-          玩家: 步骤.由谁选 === '对手' ? 1 - item.操控者 : item.操控者,
-          数量: 步骤.可选 ? { 最小: 0, 最大: 1 } : { 最小: 1, 最大: 1 },
-          候选: 空的下.map((x) => ({ 键: x, 名称: x })),
-        };
-        return;
-      }
+    case '附上': {
+      // 102 孔融：把一张附属/装备改挂到另一个单位上（旧的挂点自动解除）
+      const 挂 = 解析受方(g, item, 步骤.to).find((x): x is Obj => typeof x !== 'number');
+      const 新主 = 解析受方(g, item, 步骤.在).find((x): x is Obj => typeof x !== 'number');
+      if (!挂 || !新主) { 记录(g, '附上：找不到要挂的牌或新的单位'); break; }
+      if (步骤.佩带) 写佩带在(g, 挂, 新主.uid); else 写附属在(g, 挂, 新主.uid);
+      记录(g, 挂.def.全名 + (步骤.佩带 ? ' 佩带在 ' : ' 附属在 ') + 新主.def.全名 + ' 上（102）');
       break;
     }
     case '交换阵地': {
@@ -3960,7 +4670,154 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       break;
     }
 
-    case '观星': {
+      case '条件执行': {
+        /**
+         * 「若…则…」的一段（118 蔡文姬）。
+         *
+         * · `条件`：**现在**判（结算到这一段时）—— 不成立就跳过这一段；
+         * · `可选`：这一段是「你可以」→ 步骤级的 可选 门已经在 case 之前问过了；
+         * · `目标`：**进堆叠时**已由操控者指定（item.步骤目标槽，键 = 目标名），这里只是取出来；
+         *   没指定过 → 这一段不做（条件在进堆叠时还不成立，后来才成立的情况）。
+         * · `效应`：子步骤按顺序执行；子步骤挂起（待选择）时记下跑到第几个，答完接着来。
+         */
+        const 段 = 步骤 as { 条件?: Condition; 目标?: TargetSpec[]; 效应: ResolveStep[] };
+        const 锚 = item.来源 ?? item.card ?? null;
+        const 控 = 锚 ? 有效控制器(g, 锚) : item.操控者;
+        // ⚠ `条件` 已经由外面那层「步骤公共条件」判过并跳过了（engine 执行步骤 的循环）——
+        //   这里不再判第二次（判两遍只会多一处可能不一致的地方）。
+        // 「你可以…」在**条件通过之后**才问（否则条件不成立也弹一次，白问）
+        if ((步骤 as { 可选?: boolean }).可选 === true) {
+          const 门 = item as unknown as { 门答于?: number; 本次门?: (number | string)[] };
+          if (门.门答于 !== item.步骤游标) {
+            if (门.本次门 === undefined) {
+              item.待选择 = { 类型: '选', 选什么: '选项', 玩家: item.操控者,
+                标签: '你可以这样做：（这一段）', 数量: { 最小: 1, 最大: 1 },
+                候选: [{ 键: '接受', 名称: '这样做' }, { 键: '放弃', 名称: '不这样做' }] };
+              return;
+            }
+              const 答 = 门.本次门;
+              门.本次门 = undefined;
+              门.门答于 = item.步骤游标!;
+            if (!Array.isArray(答) || 答.length === 0 || 答[0] === '放弃') {
+              记录(g, (item.标签 ?? '') + '：选择不做这一段');
+              item.上一步生效 = false;
+              break;
+            }
+          }
+        }
+        // 段自己的目标：从 步骤目标槽 取；取不到就整段不做
+        let 缺目标 = false;
+        for (const spec of 段.目标 ?? []) {
+          const v = item.步骤目标槽?.[spec.目标名];
+          if (v === undefined) { 缺目标 = true; break; }
+          item.目标槽 ??= {};
+          item.目标槽[spec.目标名] = v as 目标;
+          if (!item.目标.includes(v as 目标)) item.目标.push(v as 目标);
+        }
+        if (缺目标) {
+          记录(g, (item.标签 ?? '') + '：这一段没有在进堆叠时指定目标，跳过');
+          item.上一步生效 = false;
+          break;
+        }
+        // 子步骤：从 子步 记的位置继续（挂起后回到这一步）
+        const 已到 = item.子步 && item.子步.步 === item.步骤游标 ? item.子步.子 : 0;
+        item.子步 = undefined;
+        let 结束 = true;
+        for (let k = 已到; k < 段.效应.length; k++) {
+          const 子 = 段.效应[k]!;
+          if (k > 已到 && 子.条件 !== undefined && !判断(g, 控, 子.条件, 锚 ?? undefined, item)) continue;
+          执行一步(g, item, 子);
+          // 子步骤的「这一步选的」用完即弃，别留给下面的子步骤
+          if (找互动引用(子)) item.本次选择 = undefined;
+          if (item.待选择) {
+            item.子步 = { 步: item.步骤游标 ?? 0, 子: k };
+            结束 = false;
+            break;
+          }
+        }
+        if (结束) item.上一步生效 = true;
+        break;
+      }
+      case '重复': {
+      /**
+       * **通用循环**（「展示牌直到…为止」）：反复执行 子步骤，直到 `直至` 成立。
+       * · 子步骤挂起（待选择）时用 item.子步 记到第几条，答完从那里接着跑；
+       * · 一轮跑完计数一次（item.重复轮），`最多` 缺省 99 —— 条件一直不成立时停，防死循环；
+       * · 只认 Condition，不认识展示/收集：循环里要收集什么由子步骤自己 `记到` 记忆。
+       */
+      const 步 = 步骤 as unknown as { 直至: Condition; 效应: ResolveStep[]; 最多?: number };
+      const 键 = item.步骤游标 ?? 0;
+      item.重复轮 ??= {};
+      let 轮 = item.重复轮[键] ?? 0;
+      const 上限 = 步.最多 ?? 99;
+      const 锚 = item.来源 ?? item.card ?? null;
+      for (;;) {
+        const 已到 = item.子步 && item.子步.步 === 键 ? item.子步.子 : 0;
+        item.子步 = undefined;
+        item.上一步生效 = undefined;
+        let 挂起 = false;
+        for (let k = 已到; k < 步.效应.length; k++) {
+          const 子 = 步.效应[k]!;
+          const 子条件 = (子 as { 条件?: Condition }).条件;
+          if (子条件 !== undefined && !判断(g, item.操控者, 子条件, 锚 ?? undefined, item)) continue;
+          执行一步(g, item, 子);
+          // 子步骤的「这一步选的」用完即弃，别漏给下一轮
+          if (找互动引用(子)) item.本次选择 = undefined;
+          if (item.待选择) { item.子步 = { 步: 键, 子: k }; 挂起 = true; break; }
+        }
+        if (挂起) return;
+        轮 += 1;
+        item.重复轮[键] = 轮;
+        if (判断(g, item.操控者, 步.直至, 锚 ?? undefined, item)) break;
+        // 子步骤明确说「没做到」（如展示时牌库空了）→ 停，别空转到上限
+        if (item.上一步生效 === false) { 记录(g, (item.标签 ?? '') + '：这一轮没有产生效果，停止'); break; }
+        if (轮 >= 上限) { 记录(g, (item.标签 ?? '') + '：重复达到上限 ' + 上限 + ' 次，停止'); break; }
+      }
+      item.上一步生效 = true;
+      break;
+    }
+    case '选择': {
+        /**
+         * **问玩家：正好选一项**（点了就算选完，不需要确认）。
+         * · `选项[].标签` = 按钮文字；`选项[].效应` = 选中后要做的事（子步骤，可再挂起）；
+         * · `记到` = 把选中项的 `值`（省略 = 下标）写进来源记忆，后面的步骤用 `{ 记忆: 键 }` 读。
+         * 答复走 `本次选择`（应用选择 对「选」类不推进游标 → 本步重跑一次把它用掉）。
+         */
+        const 步 = 步骤 as { 标签?: string; 记到?: string; 选项: { 标签: string; 值?: string | number; 效应?: ResolveStep[] }[] };
+        let 下标: number | undefined;
+        if (item.本次选择 !== undefined) {
+          const 键 = item.本次选择[0];
+          item.本次选择 = undefined;
+          下标 = typeof 键 === 'string' ? Number(键) : (typeof 键 === 'number' ? 键 : undefined);
+        }
+        if (下标 === undefined) {
+          item.待选择 = {
+            类型: '选', 选什么: '选项', 玩家: item.操控者,
+            标签: 步.标签 ?? '选择一项', 数量: { 最小: 1, 最大: 1 },
+            // ⚠ 键用**字符串下标**：应用选择 对数字键会当成 uid 去找物件（`找`），字符串原样留着 ✓
+            候选: 步.选项.map((o, i) => ({ 键: String(i), 名称: o.标签 })),
+          };
+          return;
+        }
+        const 项 = 步.选项[下标];
+        if (!项) { 记录(g, '选择：选项下标不合法（' + 下标 + '）'); break; }
+        记录(g, (步.标签 ?? '选择') + ' → ' + 项.标签);
+        if (步.记到) 存记忆(g, item, 步.记到, 项.值 ?? 下标);
+        // 该选项自己的后续操作（和 条件执行 同一套子步进度）
+        const 已到 = item.子步 && item.子步.步 === item.步骤游标 ? item.子步.子 : 0;
+        item.子步 = undefined;
+        const 列 = 项.效应 ?? [];
+        for (let k = 已到; k < 列.length; k++) {
+          const 子 = 列[k]!;
+          if (k > 已到 && 子.条件 !== undefined && !判断(g, item.操控者, 子.条件, item.来源 ?? item.card ?? undefined, item)) continue;
+          执行一步(g, item, 子);
+          if (找互动引用(子)) item.本次选择 = undefined;
+          if (item.待选择) { item.子步 = { 步: item.步骤游标 ?? 0, 子: k }; break; }
+        }
+        item.上一步生效 = true;
+        break;
+      }
+      case '观星': {
       // ── 701.5a：观星 X 是指「**检视**你牌库顶的 X 张牌，将其中任意数量的牌以**任意顺序**
       //    置于你的牌库顶，其余则以任意顺序置于你的牌库底」。
       //    ⚠ 描述里**就写着「检视」** —— 和 搜寻 一样，实现是**调用检视**（检视区域），
@@ -4005,11 +4862,10 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       // ── 第二问：其余按什么顺序沉底（点选顺序 = 底块的从上到下）
       const 余 = 牌.filter((c) => !记忆.观星顶!.includes(c));
       /**
-       * ⚠ **只要还有余牌，就一定要问** ✗→✓（用户口径 ✓）：
-       *   原来这里是 `余.length > 1` ✗ —— 只剩 1 张时**静默置底** ✓，
-       *   玩家看不到"它被放到哪了、也没点确认" ✗（2026-10 报的 ✓）。
-       *   规则上"其余则以任意顺序置于牌库底"也是**一次要玩家做的选择** ✓ →
-       *   统一成"有内容就问" ✓（1 张时这一问就是"看一眼 + 确认" ✓，下限 0 ✓ 直接确认也行 ✓）。
+       * ⚠ **只要还有余牌，就一定要问，而且必须选满** ✗→✓（用户口径 ✓）：
+       *   规则 701.5a「其余则以**任意顺序**置于你的牌库底」—— 这是**对所有余牌**的一次排序选择，
+       *   不是"挑几张置底"。所以 数量.最小 = 最大 = 余.length：每一张都要点，点选顺序就是置底顺序。
+       *   以前下限是 0 ✗ → 只点一部分也能确认，剩下的由下面那段"补齐"静默塞进去 ✗（玩家没做过这个选择）。
        */
       if (记忆.观星底 === undefined && 余.length > 0) {
         if (item.观星已问底) {
@@ -4018,9 +4874,9 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
           item.观星已问底 = true;
           item.待选择 = {
             类型: '选', 选什么: '物件',
-            标签: '观星 ' + X + '：其余 ' + 余.length + ' 张按**置底的顺序**点（先点的在上面）',
+            标签: '观星 ' + X + '：其余 ' + 余.length + ' 张**全部**按置底的顺序点（先点的在上面）',
             玩家: item.操控者,
-            数量: { 最小: 0, 最大: 余.length },
+            数量: { 最小: 余.length, 最大: 余.length },   // 701.5a：余牌全部都要指定顺序，必须选满
             候选: 余.map((c) => ({ 键: c.uid, 名称: c.def.全名 })),
             查看: 余.map((c) => ({ 键: c.uid, 名称: c.def.全名 })),
           };
@@ -4041,44 +4897,70 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       记录(g, g.players[谁]!.name + ' 观星 ' + X + '：'
         + (记忆.观星顶!.length ? 记忆.观星顶!.map((c) => c.def.全名).join('、') + ' 置顶' : '没有置顶')
         + '，' + 底.length + ' 张置底');
+      // 701.5：观星发生了 → 派发「当你观星时」；同一步会重跑，所以只派一次
+      if (!(item as unknown as { 观星已派?: boolean }).观星已派) {
+        (item as unknown as { 观星已派?: boolean }).观星已派 = true;
+        排队事件触发(g, '观星', 谁);
+      }
       break;
     }
-    case '检视': {
-      // 「检视 <某玩家> 的牌库顶/手牌」—— 看的人是**这个能力的操控者**（viewer:'你'）。
-      //   本体在 检视区域()（登记可见性 + 不记牌名的日志）。
-      //   只看的写法：数量 0、每张都「不可选」。
-      //   看完还要**选一张**的（149 清查 / 158 华歆 / 063 孙乾）写 数量/筛选/去处，
-      //   收尾交给现成的 完成搜寻（应用选择 看到 去处 就会走它）。
-      const 看的人 = item.操控者;
-      const 玩家们 = 解析玩家们(g, item, 步骤.来源);
-      const 区域 = 步骤.区域 ?? '牌库顶';
-      const { 牌, 谁们的 } = 检视区域(g, 看的人, 玩家们, 区域);
-      if (!牌.length) { 记录(g, g.players[看的人]!.name + ' 检视：' + 谁们的.join('、') + ' 是空的'); break; }
-      // 「全部」= 候选里每一张（063 孙乾「将这些牌各置入其拥有者的墓地」）
-      const 要看 = 步骤.数量 === '全部' ? 牌.length : (步骤.数量 ?? 0);
-      item.待选择 = {
-        类型: '搜寻',                      // 和搜寻共用同一个挂起与面板（都是「看一批牌再挑」）
-        标签: '检视 ' + 谁们的.join('、')
-          + (要看 > 0 ? '，选 ' + 要看 + ' 张' : '（仅你可见；看完点确认）'),
-        区域,
-        数量: 要看,
-        // ⚠ **检视没有「可放弃」这个参数** ✓（701.17b 的「未搜寻到」是**搜寻**算出来的 ✓）。
-        //   界面那层仍需要这个字段 ✓ → 纯检视**恒 false** ✓，不给数据留口子 ✗。
-        可放弃: false,
-        候选: 牌.map((c) => ({ uid: c.uid, 名称: c.def.全名,
-          可选: 要看 > 0 && 符合筛选(g, c, 步骤.筛选, 有效特征(g, c)) })),
-        玩家: 玩家们[玩家们.length - 1] ?? 看的人,
-        去处: 步骤.去处,
-      };
-      return;                             // 挂起：由 应用选择 接着做（没写 去处 就不会移动任何牌）
-    }
-      case '明置':
-        // 701.11a/b：让它保持展示牌面信息的状态
-        for (const t2 of 解析受方(g, item, 步骤.to)) {
-          if (typeof t2 === 'number') continue;
-          设面(g, t2, '明置', item.操控者);
-        }
+      case '查看': {
+        // 带 `选`：先看、再从这几张里挑一张（同一个面板）—— 答案回来时按 去处/其余 分配
+        //   ⚠ 这一段要在下面「看过了就清空」之前 —— 否则答复会被上一段吞掉。
+        const 要挑 = (步骤 as { 选?: Selector }).选;
+        if (要挑) {
+          const 存键 = '查看挑_' + (item.步骤游标 ?? 0);
+          if (item.本次选择 !== undefined) {
+            const 挑中 = item.本次选择.filter((x): x is Obj => typeof x !== 'number');
+            item.本次选择 = undefined;
+            const 全 = (读记忆(item, 存键) as Obj[] | undefined) ?? [];
+            const 去处 = (步骤 as { 去处?: string }).去处 ?? '手牌';
+            const 其余 = (步骤 as { 其余?: string }).其余;
+            const 放 = (c: Obj, 去哪: string) => {
+              const 区: Zone = 去哪 === '墓地' ? '墓地' : 去哪 === '放逐区' ? '放逐区'
+                : (去哪 === '牌库顶' || 去哪 === '牌库底') ? '牌库' : '手牌';
+              移到区域(g, c, 区);
+              if (去哪 === '牌库底') { const 库 = g.players[c.owner]!.library; const i2 = 库.indexOf(c); if (i2 >= 0) { 库.splice(i2, 1); 库.unshift(c); } }
+            };
+        for (const c of 挑中) 放(c, 去处);
+        if (其余) for (const c of 全) if (!挑中.includes(c)) 放(c, 其余);
         break;
+      }
+      const 看的人0 = item.操控者;
+      const { 牌: 牌0, 谁们的: 谁0 } = 检视区域(g, 看的人0, 解析玩家们(g, item, 步骤.来源), 步骤.区域 ?? '牌库顶');
+      const 数量0 = 步骤.数量 === '全部' ? 牌0.length : Math.max(1, 步骤.数量 ?? 1);
+      const 给看0 = 牌0.slice(0, 数量0);
+      if (!给看0.length) { 记录(g, g.players[看的人0]!.name + ' 查看：' + 谁0.join('、') + ' 是空的'); break; }
+      if (步骤.记到) 存记忆(g, item, 步骤.记到, 给看0);
+      存记忆(g, item, 存键, 给看0);
+      const 候选0 = 给看0.filter((c) => 符合选择器(g, c, 要挑, item.来源 ?? null, item.操控者, 有效特征(g, c)));
+      item.待选择 = { 类型: '选', 选什么: '物件', 玩家: 看的人0,
+        标签: '查看 ' + 谁0.join('、') + '：挑一张',
+        数量: { 最小: 1, 最大: 1 },
+        候选: 候选0.map((c) => ({ 键: c.uid, 名称: c.def.全名 })),
+        查看: 给看0.map((c) => ({ 键: c.uid, 名称: c.def.全名 })) };
+      return;
+    }
+    // 只看的那种：答复回来 = 已经看过了 → 清掉，往下走
+    if (item.本次选择 !== undefined) { item.本次选择 = undefined; break; }
+    const 看的人 = item.操控者;
+        const 玩家们 = 解析玩家们(g, item, 步骤.来源);
+        const 区域 = 步骤.区域 ?? '牌库顶';
+        const { 牌, 谁们的 } = 检视区域(g, 看的人, 玩家们, 区域);
+        if (!牌.length) { 记录(g, g.players[看的人]!.name + ' 查看：' + 谁们的.join('、') + ' 是空的'); break; }
+        const 要看 = 步骤.数量 === '全部' ? 牌.length : Math.max(1, 步骤.数量 ?? 1);
+        const 给看 = 牌.slice(0, 要看);
+        // 把**看到的这些牌**记进记忆（键由数据给）—— 后面 `{ 记忆: 键 }` 读到的就是同一批物件，
+        //   不再按「牌库顶」重新查一遍（查看与移动之间即使有别的效应，也还是这一张）。
+        if (步骤.记到) 存记忆(g, item, 步骤.记到, 给看);
+        item.待选择 = { 类型: '查看', 玩家: 看的人,
+      // ⚠ 标题**不写牌名**：牌面只在「查看」容器里给（点按钮展开）。
+      //   写进标题 = 把内容印在所有人都能看到的面板上（热座还直接摊在屏幕上）。
+      标签: '查看 ' + 谁们的.join('、') + '（点「查看」打开）',
+          查看: 给看.map((c) => ({ 键: c.uid, 名称: c.def.全名 })),
+          ...(步骤.等双方确认 ? { 等双方确认: true } : {}) };
+        return;                       // 挂起：只是看，看完继续下一步
+      }
       case '暗置':
         // 701.11c/d：让它保持隐藏牌面信息的状态（701.29a 偷窃就是暗置放逐区的牌）
         for (const t2 of 解析受方(g, item, 步骤.to)) {
@@ -4269,9 +5151,32 @@ function 结束对局(g: GameState, 胜者: number | null, 原因: string): void
 function* 执行动作G(g: GameState, p: number, act: Action): Generator<请求, void, Action | null> {
   if (act.种类 === '打领土') 打出领土(g, p, act.card, act.面);
   else if (act.种类 === '转移') 转移(g, p, act.card, act.到, act.路径 ?? '转移');
-  else if (act.种类 === '施放') 施放(g, p, act.card, act.目标, act.阵地, act.模式号, act.X, act.支付源, act.额外牺牲);
-  else if (act.种类 === '启动能力') 启动能力(g, p, act.card, act.能力索引, act.目标, act.支付源, act.模式号, act.费用弃牌, act.费用牺牲, act.宣告X);
+  else if (act.种类 === '施放') 施放(g, p, act.card, act.目标, act.阵地, act.模式号, act.X, act.支付源, act.额外, act.额外牺牲);
+  else if (act.种类 === '启动能力') 启动能力(g, p, act.card, act.能力索引, act.目标, act.支付源, act.模式号, act.费用弃牌, act.费用牺牲, act.费用横置, act.宣告X);
 else if (act.种类 === '发起战斗') {
+      /**
+       * **单位自己的攻击费用**（030 刘封 = 对自己生效的长江天险）：
+       *   不付 → 这次攻击根本不宣告（打玩家、打阵地都要付）。
+       */
+      let 自费 = 0;
+      for (const ab of (act.card.def.能力?.能力 ?? []) as StaticAbility[]) {
+        if (ab.种类 === '静止式' && typeof ab.自身攻击费用 === 'number') 自费 += ab.自身攻击费用;
+      }
+      if (自费 > 0) {
+        const 步0 = { 操作: '支付', 点数: { 最小: 自费, 最大: 自费 } } as unknown as ResolveStep;
+        const 子0 = { 操控者: p, 步骤游标: 0, steps: [步0],
+          待选择: undefined as never, 上一步生效: false, 已开始: true, 种类: '令符', id: 0,
+          标签: '自身攻击费用：' + act.card.def.全名 } as unknown as StackItem;
+        for (;;) {
+          执行一步(g, 子0, 步0);
+          if (!子0.待选择) break;
+          const 答0 = yield { 玩家: p, 时机: {} as never, 步骤: '宣告攻击', 决定: 子0.待选择 } as 请求;
+          if (!答0 || (答0 as { 接受?: boolean }).接受 === false) return;
+          应用选择(g, 子0, 答0);
+        }
+        if (!子0.上一步生效) return;
+        记录(g, g.players[p]!.name + ' 为 ' + act.card.def.全名 + ' 的攻击支付了 ' + 自费 + ' 点');
+      }
       // 120 长江天险：「除非其操控者支付{2}，否则该单位不能攻击你」——
       //   ⚠ **付不付是进攻方的选择** ✗→✓：以前引擎「替他付」✗，把「改打阵地 / 留着这 2 点」
       //   这个策略取舍直接抹掉了 ✓。现在：支付源由**宣告时**随动作一起给（需求里的可选槽 ✓，
@@ -4344,11 +5249,7 @@ export interface 请求 {
      * 而且 \`候选\` 这个字段在「决定先手」里是**座位号**、在「调度宣告」里是**张数**，
      * 同名不同义 —— 现在各自一个名字。
      */
-    | { 类型: '决定先手'; 标签: string; 候选座位: number[] }
-    | { 类型: '调度宣告'; 标签: string; 候选张数: number[] }
-    | { 类型: '调度执行'; 标签: string; 张数: number; 手牌: { uid: number; 名称: string; 可选: boolean }[] }
-    | { 类型: '看牌库顶'; 标签: string }
-    // ⚠ 统一【选】：待选择原样发给玩家（选物件 / 选选项 / 选阵地…），AI 也必须答 ——
+      // ⚠ 统一【选】：待选择原样发给玩家（选物件 / 选选项 / 选阵地…），AI 也必须答 ——
     //   不答的话那一步看到「还没选」会再挂一次同一问，空转（日志里反复「X 选了 （没有）」）。
     | { 类型: '选'; 选什么: '物件' | '选项' | '阵地' | '触发'; 标签?: string; 玩家: number;
         数量?: { 最小: number; 最大: number }; 候选?: { 键: number | string; 名称: string }[];
@@ -4398,9 +5299,9 @@ export function* 优先权循环G(g: GameState, opts: 时机选项, 步骤: stri
           if (顶.declined) { 连续让过 = n; p = g.active; continue; }
         }
 
-        // ⚠ **目标在这里选** —— 规则书没有规定触发式能力的目标在何时指定
-        //   （603.3d 只是 603.3 那一节的叙述；603.3f 说的是模式、603.4 说的是条件）。
-        //   本引擎定为**结算时**，而且在「你可以」那一问**之后**：先决定要不要做，再挑对象。
+      // ⚠ **这里只剩兜底**：正常流程的目标已经在「放堆叠」那一问里指定完了（115.1d / 603.3d），
+      //   待定目标 只有直接调用 结算堆叠顶（测试 / AI）时才会非空。
+      //   顺序也由此变对：目标（放堆叠）→「你可以」（下面那一问，603.5：选择在结算时作）。
         if (顶.待定目标 && 顶.待定目标.length && 顶.来源) {
           // 必需的目标一个都挑不出来 → 能力取消、什么都不做（603.3f 的精神，只是移到结算这一刻）。
           //   ⚠ 这条必须在**问之前**判：候选为空时不该把问题发出去（问了也答不了）。
@@ -4523,11 +5424,12 @@ export function* 进行回合G(g: GameState): Generator<请求, void, Action | n
   } else {
     for (const o of g.战场) {
     if (有效控制器(g, o) !== p) continue;                       // 只有**你操控的**重置
-    // 034 一蹶不振：「所附属之单位于其操控者的重置步骤中**不能重置**」
-    //   ⚠ 只挡重置步骤 —— 别的效应（如 082 徐庶的重置）照样能重置它。
+    // 034 一蹶不振 / 017 罗刹的大喝：重置步骤里不能重置
     if (有效特征(g, o).不能重置) continue;
     写横置(g, o, false); 写整备(g, o, false);
   }
+    // 017：这些「下一次重置步骤」的效应到此为止（先判过，再清）
+    写连续效应(g, g.连续效应.filter((e) => !(e.时长 === '下一次重置步骤' && (e.到期玩家 === undefined || e.到期玩家 === p))));
   }
   记录(g, '—— ' + g.players[p]!.name + ' 的第 ' + g.turn + ' 回合 ——');
   // 704.5q / 122.1d：准备步骤里有九个或更多天命标记的玩家赢得此盘
@@ -4554,34 +5456,16 @@ export function* 进行回合G(g: GameState): Generator<请求, void, Action | n
   // 514 弃牌步骤：手牌超过上限就要弃，**弃哪几张由该玩家选**
   const pl = g.players[p]!;
   g.当前步骤 = '弃牌步骤';
-  const 上限 = 手牌上限为(g, pl.index);
-  while (pl.hand.length > 上限) {
-    const 需弃 = pl.hand.length - 上限;
-    const 答 = yield {
-      玩家: p, 时机: { 允许打领土: false, 允许通常时机: false }, 步骤: '弃牌步骤',
-      决定: { 类型: '弃牌', 需弃, 标签: '手牌上限 ' + 上限 + '，请选 ' + 需弃 + ' 张弃掉' },
-    };
-    const 选 = (答 && 答.种类 === '决定' && Array.isArray(答.弃牌)) ? 答.弃牌 : [];
-    const 有效 = 选.filter((uid) => pl.hand.some((c) => c.uid === uid)).slice(0, 需弃);
-    if (有效.length === 0) {
-      const 弃 = pl.hand[pl.hand.length - 1]!;          // 没给选择就兜底，避免卡死
-      移到区域(g, 弃, '墓地');
-      记录(g, pl.name + ' 弃掉 ' + 弃.def.全名 + '（手牌上限 ' + 上限 + '，自动）');
-      continue;
-    }
-    for (const uid of 有效) {
-      const i = pl.hand.findIndex((c) => c.uid === uid);
-      const 弃 = pl.hand[i]!;
-      移到区域(g, 弃, '墓地');
-      记录(g, pl.name + ' 弃掉 ' + 弃.def.全名 + '（手牌上限 ' + 上限 + '）');
-    }
-  }
+  yield* 弃牌到上限G(g, p);
   写临时效应(g, []);
+  g.临时费用修正 = [];
   // 711：本回合结束的持续性效应失效
   写连续效应(g, g.连续效应.filter((e) => e.时长 !== '直到回合结束'));
   // 603.7：本回合登记的延迟触发也在这时清掉（'下一次' 的触发时就自己删了）
   g.守望 = g.守望.filter((w) => w.时长 !== '直到回合结束');
   检查状态动作(g);
+  // 513.4：此时把「等待进入堆叠」的触发式能力放进堆叠，然后进攻玩家得到优先权
+  if (g.pending.length) yield* 优先权循环G(g, { 允许打领土: false, 允许通常时机: false }, '弃牌步骤');
 }
 
 /**
@@ -4618,79 +5502,107 @@ function* 开局流程G(g: GameState): Generator<请求, void, Action | null> {
   const 无时机: 时机选项 = { 允许打领土: false, 允许通常时机: false };
   const 人数 = g.players.length;
 
-  // 103.1 决定先手。**联机由服务端在发牌时就随机定了** —— 那时手牌已经发过，
-  //   这一段自然跳过；只有热座（要人来点）才会 yield 出去。
-  //   ⚠ 判据从「o.阶段 === '决定先手'」换成「手牌发过了没有」—— 阶段那个字段已经删了。
-  if (g.players.every((pl) => pl.hand.length === 0)) {
-    const 候选座位 = Array.from({ length: 人数 }, (_, i) => i);
-    const a = yield { 玩家: 0, 时机: 无时机, 步骤: '决定先手',
-      决定: { 类型: '决定先手', 标签: '决定先后手', 候选座位 } };
-    const 先 = a && a.种类 === '决定' && typeof a.先手 === 'number' && 候选座位.includes(a.先手)
-      ? a.先手 : Math.floor(g.随机源() * 人数);
-    决定先手(g, 先);
+// ── 开局的三步选择：**都用通用的「选择」**（点按钮即生效），规则动作仍交给引擎函数 ──
+//   · 合成一条链（没有来源 → 记忆挂在链自己身上，`记到` 的值从这里读出来）；
+//   · 「选择」正好选一项 → 客户端点按钮就算选完；
+//   · 选定之后调 决定先手 / 宣告调度 / 执行调度 —— 那三个函数只负责规则，不再负责 UI 形状。
+const 合成 = (操控者: number, 标签: string, steps: ResolveStep[]): StackItem => ({
+  id: g.nextStackId++, 种类: '触发式', 标签, 操控者, 来源: null, card: null,
+  目标: [], 目标槽: {}, steps,
+});
+const 跑链 = function* (项: StackItem): Generator<请求, void, Action | null> {
+  while (!执行步骤(g, 项)) {
+    const d = 项.待选择;
+    const 答 = yield { 玩家: d?.玩家 ?? 项.操控者, 时机: 无时机, 步骤: d?.标签 ?? 项.标签, 决定: d as never };
+    应用选择(g, 项, 答);
   }
+};
 
-  // 由先手开始依次 —— **顺序就是这个数组**，不再存进状态、也不用函数去推进它
-  const 顺序 = Array.from({ length: 人数 }, (_, i) => (g.先手玩家 + i) % 人数);
+// 103.1 决定先手。**联机由服务端在发牌时就随机定了** —— 那时手牌已经发过，
+//   这一段自然跳过；只有热座（要人来点）才会问。
+if (g.players.every((pl) => pl.hand.length === 0)) {
+  const 项 = 合成(0, '决定先后手', [{
+    操作: '选择', 标签: '决定先后手', 记到: '先手',
+    选项: [
+      ...Array.from({ length: 人数 }, (_, i) => ({ 标签: g.players[i]!.name, 值: i })),
+      // 随机先手：值是 '随机'（不是数字）→ 下面的回退分支用 随机源 抽一个
+      { 标签: '随机', 值: '随机' },
+    ],
+  }]);
+  yield* 跑链(项);
+  const 先 = typeof 项.记忆?.先手 === 'number' ? 项.记忆.先手 : Math.floor(g.随机源() * 人数);
+  决定先手(g, 先);
+}
 
-  // 103.4 前半：依次宣告调度张数
-  for (const p of 顺序) {
-    const pl = g.players[p]!;
-    const 下限 = Math.max(0, o.起手牌数 - pl.hand.length);      // 103.4：不足七张时必须补足差额
-    const 候选: number[] = [];
-    for (let k = 下限; k <= pl.hand.length; k++) 候选.push(k);
-    const a = yield { 玩家: p, 时机: 无时机, 步骤: '调度宣告',
-      决定: { 类型: '调度宣告', 标签: '要调度几张？', 候选张数: 候选 } };
-    const n = a && a.种类 === '决定' && typeof a.张数 === 'number' && 候选.includes(a.张数) ? a.张数 : 下限;
-    if (!宣告调度(g, p, n)) { 记录(g, '⚠ 调度宣告无效，按 ' + 下限 + ' 张处理'); 宣告调度(g, p, 下限); }
+// 由先手开始依次 —— **顺序就是这个数组**，不再存进状态、也不用函数去推进它
+const 顺序 = Array.from({ length: 人数 }, (_, i) => (g.先手玩家 + i) % 人数);
+
+// 103.4 前半：依次宣告调度张数
+for (const p of 顺序) {
+  const pl = g.players[p]!;
+  const 下限 = Math.max(0, o.起手牌数 - pl.hand.length);      // 103.4：不足七张时必须补足差额
+  const 选项: { 标签: string; 值: number }[] = [];
+  for (let k = 下限; k <= pl.hand.length; k++) 选项.push({ 标签: k + ' 张', 值: k });
+  const 项 = 合成(p, '调度宣告', [{ 操作: '选择', 标签: '要调度几张？', 记到: '张数', 选项 }]);
+  yield* 跑链(项);
+  const n = typeof 项.记忆?.张数 === 'number' ? 项.记忆.张数 : 下限;
+  if (!宣告调度(g, p, n)) { 记录(g, '⚠ 调度宣告无效，按 ' + 下限 + ' 张处理'); 宣告调度(g, p, 下限); }
+}
+
+// 103.4 后半：**宣告了才执行** —— 选哪几张仍然是通用「选·物件」（多选，必须选满 n 张）
+for (const p of 顺序) {
+  const n = o.调度张数[p] ?? 0;
+  if (n <= 0) continue;
+  const pl = g.players[p]!;
+  const 项 = 合成(p, '调度执行', []);
+  项.待选择 = { 类型: '选', 选什么: '物件', 玩家: p,
+    标签: '选出 ' + n + ' 张放回牌库', 数量: { 最小: n, 最大: n },
+    候选: pl.hand.map((x) => ({ 键: x.uid, 名称: x.def.全名 })) };
+  const d = 项.待选择;
+  const 答 = yield { 玩家: p, 时机: 无时机, 步骤: d.标签, 决定: d as never };
+  应用选择(g, 项, 答);
+  // ⚠ 应用选择 把数字键都换成了**物件**（`找` 会去各区域按 uid 找）——
+  //   所以这里要的是 uid，不是「数字项」。以前只留数字 → 空数组 → 每次都“调度执行无效”。
+  const 选 = (项.本次选择 ?? [])
+    .map((x) => (typeof x === 'number' ? x : (x && typeof x === 'object' && 'uid' in x ? x.uid : undefined)))
+    .filter((x): x is number => typeof x === 'number');
+  if (!执行调度(g, p, 选)) {
+    记录(g, '⚠ 调度执行无效，自动选前 ' + n + ' 张');
+    执行调度(g, p, pl.hand.slice(0, n).map((x) => x.uid));
   }
+}
 
-  // 103.4 后半：**宣告了才执行** —— 顺序同样在这个循环里
-  for (const p of 顺序) {
-    const n = o.调度张数[p] ?? 0;
-    if (n <= 0) continue;
-    const pl = g.players[p]!;
-    const a = yield { 玩家: p, 时机: 无时机, 步骤: '调度执行',
-      决定: { 类型: '调度执行', 标签: '选出 ' + n + ' 张放回牌库', 张数: n,
-              手牌: pl.hand.map((x) => ({ uid: x.uid, 名称: x.def.全名, 可选: true })) } };
-    // ⚠ `a.选` 现在可能是字符串（选项类），调度只认 uid —— 收窄成数字再交下去。
-    const 选 = (a && a.种类 === '决定' && Array.isArray(a.选) ? a.选 : pl.hand.slice(0, n).map((x) => x.uid))
-      .filter((x): x is number => typeof x === 'number');
-    if (!执行调度(g, p, 选)) {
-      记录(g, '⚠ 调度执行无效，自动选前 ' + n + ' 张');
-      执行调度(g, p, pl.hand.slice(0, n).map((x) => x.uid));
+// 103.6 后手的牌库顶：**和卡数据同一条通用链**（查看 → 选择：放到牌库顶 / 放到牌库底）
+//   · 没有专用函数、没有专用决定类型；
+//   · 「选择」正好选一项 → 客户端点按钮就算选完，不再有“这样做/不这样做”；
+//   · 两个分支各自是一次显式 `移动`，没有“什么都不做”的隐式路径。
+{
+  const 后 = (g.先手玩家 + 1) % 人数;
+  if (g.players[后]!.library.length) {
+    const 项 = {
+      id: g.nextStackId++, 种类: '触发式' as const, 标签: '103.6 后手的牌库顶',
+      操控者: 后, 来源: null, card: null, 目标: [], 目标槽: {},
+      steps: [
+        // 先看一眼牌库顶，并**把这张记下来**（记到:'顶牌'）—— 后面两个分支都用 `{记忆:'顶牌'}`，
+        // 于是“看的那张”和“要移的那张”是同一个物件，不再按「牌库顶」重新查一次。
+        { 操作: '查看' as const, 来源: { ref: '操控者' as const }, 区域: '牌库顶' as const, 记到: '顶牌' },
+        { 操作: '选择' as const, 标签: '这张牌放到哪里？',
+          选项: [
+            // 两个分支都移动**刚刚看到的那张**（`{记忆:'顶牌'}`），不再按「牌库顶」重查一次
+            { 标签: '放到牌库顶',
+              效应: [{ 操作: '移动' as const, to: { 记忆: '顶牌' } as const, 去处: '牌库顶' }] },
+            { 标签: '放到牌库底',
+              效应: [{ 操作: '移动' as const, to: { 记忆: '顶牌' } as const, 去处: '牌库底' }] },
+          ] },
+      ],
+    } as StackItem;
+    while (!执行步骤(g, 项)) {
+      const d = 项.待选择;
+      const 答 = yield { 玩家: 后, 时机: 无时机, 步骤: d?.标签 ?? '103.6', 决定: d as never };
+      应用选择(g, 项, 答);
     }
   }
-
-  // 103.6 后手检视自己的牌库顶
-  {
-    const 后 = (g.先手玩家 + 1) % 人数;
-    const lib = g.players[后]!.library;
-    const 顶 = lib[lib.length - 1];
-    // ⚠ **103.6 的检视就走【检视】这个操作** ✓（701.17）—— 用**和它同一个挂起形状** ✓：
-    //   类型:'搜寻' + 标签以「检视」开头 ✓ —— 客户端那条现成的「检视/搜寻」面板就会把牌显示出来 ✓。
-    //   以前自己造了个 `类型:'看牌库顶'` 的决定 ✗ → 牌没界面显示 ✓ → 客户端只好再写一个识别条件 ✗
-    //   （同一个操作的两套显示 ✓，我已经被这么坑过好几次 ✓）。
-    if (顶) {
-      // ⚠ **一次检视 = 一份登记** ✓（和 检视区域 同一个口径 ✓）：这里也是"新的一次检视" ✓
-      //   → 必须先清掉这个人上一次的登记 ✓，否则它会一直留在界面的「检视」里 ✗
-      //   （2026-10 报的：观星 3 张，界面上却写着「检视（4 张）」✓ —— 多出来的那张就是这里 ✗）。
-      清检视(g);   // 同上：一次检视 = 一份登记 ✓
-      登记检视(g, 后, 顶);
-      yield { 玩家: 后, 时机: 无时机, 步骤: '后手看牌库顶',
-        决定: { 类型: '选', 选什么: '物件', 玩家: 后, 标签: '检视 ' + g.players[后]!.name + ' 的牌库顶（仅你可见；看完点确认）',
-          数量: { 最小: 0, 最大: 0 },   // ⚠ 只看不选（需 0/0 ✓）—— 这里**不再借搜寻的形状** ✓（014 那条 701.17b 的注释随之作废 ✓）
-          //   检视只是看，没有「找不到」这回事 ✓（数量 0 已让确认在什么都没选时也能按 ✓）。
-          //   ⚠ 按规范：那张牌是**查看内容**（只读 ✓），**不是候选** ✗ —— 用 `给看()` 说 ✓
-          //   （引擎里产生 `查看` 只有这一处 ✓；这里是最普通的一次"给某人看一张牌" ✓）。
-          查看: 给看({}, [{ 键: 顶.uid, 名称: 顶.def.全名 }]).查看 } };
-
-    }
-    // 看完之后才是 103.6 的**决定**（留顶/置底 ✓）—— 那是另一件事 ✓（所以是第二个请求 ✓）
-    const a = yield { 玩家: 后, 时机: 无时机, 步骤: '后手决定顶牌去向',
-      决定: { 类型: '看牌库顶', 标签: '103.6：牌库顶牌留在牌库顶，还是置于牌库底？' } };
-    后手决定顶牌去向(g, !(a && a.种类 === '决定' && a.接受 === false));
-  }
+}
 
   // **开局做完了 —— 把这块状态整个丢掉**。「完成」不是一个状态，是「没有开局这回事」。
   //   客户端判断「对局中」也从 `s.开局.阶段 === '完成'` 变成 `!s.开局`。
@@ -4839,12 +5751,15 @@ export function 合法攻击对象(g: GameState, p: number, u: Obj): 攻击对�
 
 /** 508：某单位宣告攻击后，把它自己那些「当此单位宣告攻击时」的触发放进待触发队列 */
 export function 排队宣告攻击触发(g: GameState, u: Obj, 受方?: number | Obj): void {
+  // 072 凌操「本回合第一个攻击的单位」/ 其它「本回合发生过 宣告攻击」都要查事件记录
+  记事件(g, '宣告攻击', { 受方: u.uid, ...(typeof 受方 === 'number' ? { 数量: 受方 } : {}) });
   // ⚠ 同上：以前只看 u 自己 ✗；现在全场广播 ✓（「当另一个单位宣告攻击时」也认 ✓）
   排队单位事件触发(g, '宣告攻击', u, { 触发受方: 受方 });
 }
 export function* 执行战斗流程G(g: GameState, p: number, u: Obj, 期望目标: 攻击对象): Generator<请求, void, Action | null> {
   // 117.1b：战斗流程中不是通常时机（打领土/起通常能力/再发起战斗都不行）
   g.战斗中 = true;
+  g.当前进攻者 = u;                                       // 「进攻单位」= 本次战斗的进攻方
   try {
   // 507 战斗准备步骤
   if (!能发起战斗(g, p, u)) { 记录(g, u.def.全名 + ' 不满足发起战斗的条件，战斗中止（507.1a）'); return; }
@@ -4915,7 +5830,7 @@ export function* 执行战斗流程G(g: GameState, p: number, u: Obj, 期望目�
   if (g.over) return;
   yield* 优先权循环G(g, 战斗时机, '战斗结束步骤');        // 510.1
   记录(g, '战斗流程结束，回到行动阶段（510.3）');
-  } finally { g.战斗中 = false; }
+  } finally { g.战斗中 = false; g.当前进攻者 = null; }
 }
 
 /** 自动推进（AI / 无界面场合）：可选触发一律接受 */
@@ -4945,23 +5860,28 @@ export function 有效能力列表(g: GameState, o: Obj): Ability[] {
   if (f.失去所有能力) return 印;
   const 授 = f.关键词.filter((k) => !k.印制 && 能解析(k.名称))
     .map((k) => 解析能力({ 名称: k.名称, ...(k.数值 !== undefined ? { 数值: k.数值 } : {}) } as 关键词能力 as Ability));
-  return [...印, ...授];
+  // 106：层6 授予的完整能力（佩带者获得的那条启动式）
+  return [...印, ...授, ...f.获得能力];
 }
 
 /** 当前有哪些启动式能力可以启动（费用、时机、限制、启动条件都要过） */
 export function 可用启动式能力(g: GameState, p: number, o: Obj): number[] {
   if (!有规则叙述(g, o)) return [];               // 709.2a / 层6
+  // 025 魏司典 / 075 毁容：这个物件的启动式能力不能启动（层6，实时）
+  if (有效特征(g, o).不能启动能力 === true) return [];
   const 通常时机 = 处于通常时机(g, p);
-  if (g.over || 有效控制器(g, o) !== p) return [];
-  // 702.69a 再起「于具有再起能力的牌**在墓地中时**生效」—— 所以合法区域不止战场
-  const 合法区域 = o.区域 === '战场' || (o.区域 === '墓地' && 有词(g, o, '再起'));
-  if (!合法区域) return [];
+  if (g.over) return [];
+
   const 已用 = 本回合用过的能力(o, g.turn);
   const out: number[] = [];
   有效能力列表(g, o).forEach((ab0, i) => {
     // 关键词能力先按 702 章展开（射击 → {通常}{横置}→…）
     const ab = ab0 as unknown as ActivatedAbility;
     if (ab.种类 !== '启动式' || ab.是费用能力) return;   // 费用能力由支付流程处理
+    // **能力自己的区域**：省略 = 战场；写 '墓地' 的只能在墓地启动（051 大乔 / 702.69a 再起）
+    if (((ab as { 区域?: '战场' | '墓地' }).区域 ?? '战场') !== o.区域) return;
+    // 103：只有写了 任何玩家 的能力允许别人启动
+    if (!ab.任何玩家 && 有效控制器(g, o) !== p) return;
     if (ab.限制 === '每回合一次' && 已用.includes(i)) return;
     if (ab.时机 !== '瞬发' && !通常时机) return;
     if (取费用行为(ab.费用, '横置') && (o.tapped || (o.sick && !有词(g, o, '神速')))) return;
@@ -4980,11 +5900,14 @@ export function 可用启动式能力(g: GameState, p: number, o: Obj): number[]
 }
 
 /** 启动一个启动式能力：先选目标（601.1），再付全额费用（118.3），然后进堆叠 */
-export function 启动能力(g: GameState, p: number, o: Obj, 索引: number, 目标已选?: 目标[], 支付源?: number[], 模式号?: number, 费用弃牌?: number[], 费用牺牲?: number[], 宣告X?: number): boolean {
+export function 启动能力(g: GameState, p: number, o: Obj, 索引: number, 目标已选?: 目标[], 支付源?: number[], 模式号?: number, 费用弃牌?: number[], 费用牺牲?: number[], 费用横置?: number[], 宣告X?: number): boolean {
   // ⚠ 索引指的是 有效能力列表 的下标 —— 牌面印的在前，层6 授予的关键词在后（逐份）。
   //   这样「两个独立的射击2」就是两个不同的下标，各自启动、各自结算。
   const ab = 有效能力列表(g, o)[索引] as unknown as ActivatedAbility | undefined;
   if (!ab || ab.种类 !== '启动式') return false;
+  // 能力自己的区域必须和现在所在区域一致（省略 = 战场）
+  if (((ab as { 区域?: '战场' | '墓地' }).区域 ?? '战场') !== o.区域) return false;
+  if (有效特征(g, o).不能启动能力 === true) return false;   // 025 / 075
   const 目标: 目标[] = [];
   const 目标槽: Record<string, 目标> = {};
   // 700.2b：模式在进堆叠时就定了 —— 有模式就取那一个选项的目标与效应
@@ -5007,45 +5930,73 @@ export function 启动能力(g: GameState, p: number, o: Obj, 索引: number, �
     目标.push(取.obj ?? 取.玩家!);
     目标槽[spec.目标名] = 取.obj ?? 取.玩家!;
   }
-  // 付费用（费用必须全额）
-  // 108.3a：费用里带 {X} 的启动式能力 —— X 由启动的玩家宣告（085 周瑜 / 105 孙权）
-    const 支付 = 支付费用(ab.费用);
-  // ★ 费用点数要**求值**（108.3a/108.3i）：周瑜 {X}{X} = 费用点数 {乘以:'X',系数:2} = 2X ✓
-  //   以前写成 `宣告X ? 宣告X : 支付.点数` ✗ → 周瑜只收 X（能付 3）✗
-  const 通用数 = 费用点数值(取费用行为(ab.费用, '支付')?.点数, 宣告X);
-  if (通用数 && !支付数字费用(g, p, 通用数, 支付源)) { 记录(g, '数字费用支付失败'); return false; }
-  const 体力费 = 取费用行为(ab.费用, '体力');
-  if (体力费) g.players[p]!.体力 -= 体力费.点数;
-  // ⚠ **单位自己的体力**：给**来源单位** o 记伤害标记 ✓（和 `失去体力` 那一步同款 ✓）——不是玩家 ✓
-  const 自身体力费 = 取费用行为(ab.费用, '自身体力');
-  if (自身体力费) {
-    写伤害(g, o, o.damage + 自身体力费.点数);
-    记录(g, o.def.全名 + ' 失去 ' + 自身体力费.点数 + ' 点体力（启动费用）');
-  }
-  if (取费用行为(ab.费用, '横置')) 写横置(g, o, true);
-  排队单位事件触发(g, '成为横置', o);
-  // 602.1d：「→」前的「弃一张牌」「牺牲一个单位」都是**启动费用** —— 进堆叠之前付掉。
-  //   候选由玩家选（界面上的槽），这里只校验够不够、并真的执行。
-  const 弃牌费 = 取费用行为(ab.费用, '弃牌');
-  if (弃牌费) {
-    const 要弃 = 弃牌费.宣告X ? (宣告X ?? 0) : 弃牌费.数量.最小;
-    const 选 = (费用弃牌 ?? []).filter((uid) => g.players[p]!.hand.some((c) => c.uid === uid));
-    if (选.length < 要弃) { 记录(g, o.def.全名 + '：弃牌费用付不出（需要 ' + 要弃 + ' 张）'); return false; }
-    for (const uid of 选.slice(0, 要弃)) {
-      const c = g.players[p]!.hand.find((x) => x.uid === uid)!;
-      记录(g, g.players[p]!.name + ' 弃掉 ' + c.def.全名 + '（启动费用，602.1d）');
-      置入墓地(g, c);
+  // ── 付费用（602.1d）：**通用循环**，和「打出的额外费用」同一套写法 ──────────
+  //   以前是一串写死的 if（支付→体力→自身体力→横置自身→弃牌→牺牲），所以
+  //   · `横置{目标:'其他'}` 在启动式上没有实现；
+  //   · 不认识的操作**静默忽略**（费用不付也当成功）。
+  //   现在按 `ab.费用` 列表逐条付；任何一条付不出 / 不认识 → 启动失败。
+  const 支付 = 支付费用(ab.费用);
+  let 牺牲自己 = false;
+  for (const f of (ab.费用 ?? []) as 费用行为[]) {
+    switch (f.操作) {
+      case '支付': {
+        // 108.3a/108.3i：费用点数要**求值**（周瑜 {X}{X} = {乘以:'X',系数:2} = 2X）
+        const 通用数 = 费用点数值(f.点数, 宣告X);
+        if (通用数 && !支付数字费用(g, p, 通用数, 支付源)) { 记录(g, '数字费用支付失败'); return false; }
+        break;
+      }
+      case '体力':
+        g.players[p]!.体力 -= f.点数;
+        break;
+      case '自身体力':
+        // ⚠ 给**来源单位** o 记伤害标记（不是玩家）
+        写伤害(g, o, o.damage + f.点数);
+        记录(g, o.def.全名 + ' 失去 ' + f.点数 + ' 点体力（启动费用）');
+        break;
+      case '横置': {
+        if (f.目标 === '自身') { 写横置(g, o, true); 排队单位事件触发(g, '成为横置', o); break; }
+        const 选 = (费用横置 ?? []).map((uid) => g.战场.find((x) => x.uid === uid))
+          .filter((x): x is Obj => !!x && x !== o && 有效控制器(g, x) === p && !x.tapped
+            && (!f.筛选 || 符合筛选(g, x, f.筛选)));
+        if (选.length < f.数量.最小) { 记录(g, o.def.全名 + '：横置费用付不出（需要 ' + f.数量.最小 + ' 个）'); return false; }
+        for (const x of 选.slice(0, f.数量.最小)) {
+          写横置(g, x, true);
+          排队单位事件触发(g, '成为横置', x);
+          记录(g, g.players[p]!.name + ' 为启动 ' + o.def.全名 + ' 横置 ' + x.def.全名 + '（启动费用，602.1d）');
+        }
+        break;
+      }
+      case '弃牌': {
+        const 要弃 = f.宣告X ? (宣告X ?? 0) : f.数量.最小;
+
+        const 选 = (费用弃牌 ?? []).filter((uid) => g.players[p]!.hand.some((c) => c.uid === uid && (!f.筛选 || 符合筛选(g, c, f.筛选))));
+        if (选.length < 要弃) { 记录(g, o.def.全名 + '：弃牌费用付不出（需要 ' + 要弃 + ' 张）'); return false; }
+        走弃牌操作(g, p, 选.slice(0, 要弃).map((uid) => g.players[p]!.hand.find((x) => x.uid === uid)!).filter(Boolean), '（启动费用，602.1d）');
+        break;
+      }
+      case '牺牲': {
+        const 选 = (费用牺牲 ?? []).map((uid) => g.战场.find((x) => x.uid === uid))
+          .filter((x): x is Obj => !!x && 有效控制器(g, x) === p && (!f.筛选 || 符合筛选(g, x, f.筛选)));
+        if (选.length < f.数量.最小) { 记录(g, o.def.全名 + '：牺牲费用付不出（需要 ' + f.数量.最小 + ' 个）'); return false; }
+        for (const x of 选.slice(0, f.数量.最小)) 牺牲(g, x);
+        break;
+      }
+      case '暗置进场':
+        // 701.11c：把来源暗置；走统一入口，好触发「当…暗置时」
+        设面(g, o, '暗置', p);
+        break;
+      case '牺牲自身':
+        牺牲自己 = true;
+        break;
+      case '放逐自身':
+        移到区域(g, o, '放逐区');
+        记录(g, g.players[p]!.name + ' 把 ' + o.def.全名 + ' 从' + o.区域 + '放逐（启动费用）');
+        break;
+      default:
+        记录(g, o.def.全名 + '：启动费用里有不支持的「' + String((f as { 操作: string }).操作) + '」，启动失败');
+        return false;
     }
   }
-  const 牺牲费 = 取费用行为(ab.费用, '牺牲');
-  if (牺牲费) {
-    const 选 = (费用牺牲 ?? []).map((uid) => g.战场.find((x) => x.uid === uid)).filter((x): x is Obj => !!x && 有效控制器(g, x) === p);
-    if (选.length < 牺牲费.数量.最小) { 记录(g, o.def.全名 + '：牺牲费用付不出（需要 ' + 牺牲费.数量.最小 + ' 个）'); return false; }
-    for (const x of 选.slice(0, 牺牲费.数量.最小)) 牺牲(g, x);
-  }
-  // 费用：启动这个能力时把**来源**暗置（701.11c）。走统一入口，好触发「当…暗置时」。
-  if (取费用行为(ab.费用, '暗置进场')) 设面(g, o, '暗置', p);
-  const 牺牲自己 = 取费用行为(ab.费用, '牺牲自身');
   if (ab.限制 === '每回合一次') {
     const 已用 = 本回合用过的能力(o, g.turn);
     写记忆(g, o, '本回合已用能力', { 回合: g.turn, 索引: [...已用, 索引] });

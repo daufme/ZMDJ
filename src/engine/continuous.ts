@@ -20,7 +20,7 @@
  *   - 层2 操控权改变与层3 描述改变目前没有效应会产生，但层位已留好
  *   - 613.8 从属系统未实现，同层一律按时间印记
  */
-import type { CardType, Faction, Supertype, 筛选, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 历史条件, 筛选比较 } from './types.js';
+import type { CardType, Faction, Supertype, 筛选, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 历史条件, 筛选比较, Value } from './types.js';
 import { 牌面费用值 } from './费用.js';
 import type { GameState, Obj } from './state.js';
 import { 相对阵地, 相邻阵地, 斜对阵地, 加事件记录, 写事件记录, 盖章 } from './state.js';
@@ -31,14 +31,26 @@ import type { 阵地 } from './types.js';
  * 层 7c 的增减可以是固定数，也可以是 `{ 记忆: 键 }` ——
  * 记忆源就是**这个层所属效应的来源**（118 英魂附体把被放逐那张牌的武力/体力记在阵略身上）。
  */
-function 层值(v: unknown, 来源: Obj | null): number {
+/**
+ * 层里求值。带 `g` 时额外支持「数量」类（`{ 数: 选择器 }` = 你操控的魏领土数之类）——
+ * 层7a 的 `定义武力` 要它；不带 g 的老调用点行为不变。
+ */
+function 层值(v: unknown, 来源: Obj | null, g?: GameState): number {
   if (typeof v === 'number') return v;
   if (!v || typeof v !== 'object') return 0;
   const o = v as Record<string, unknown>;
   if ('记忆' in o) return Number(来源?.记忆[String(o['记忆'])] ?? 0);
+  if ('数' in o && g) return 符合选择器的物件数(g, 来源, o['数'] as Selector);
+  if ('本回合失去体力' in o) {
+    if (!g) return 0;
+    const 号 = o['本回合失去体力'] === '你' ? (来源?.操控者 ?? 0) : Number(o['本回合失去体力']);
+    return g.事件记录.filter((ev) => ev.事件 === '失去体力' && ev.回合 === g.turn && ev.受方 === 号)
+      .reduce((n, ev) => n + Number(ev.数量 ?? 0), 0);
+  }
   // 「乘以系数」（107 黄盖「每已损失 1 点体力，便 +2 武力」= 伤害标记数 × 2）
-  if ('乘以' in o) return 层值(o['乘以'], 来源) * Number(o['系数'] ?? 0);
+  if ('乘以' in o) return 层值(o['乘以'], 来源, g) * Number(o['系数'] ?? 0);
   // 「这个物件自己的属性」—— 层里的「自己」就是**这个层所属效应的来源**
+  if ('加' in o) return 层值(o['加'], 来源, g) + Number(o['值'] ?? 0);
   if ('自身' in o) {
     if (!来源) return 0;
     const 什么 = String(o['自身']);
@@ -49,6 +61,15 @@ function 层值(v: unknown, 来源: Obj | null): number {
     return 什么 === '体力上限' ? 取数(来源.def.体力上限) : 取数(来源.def.武力);
   }
   return 0;
+}
+
+/** 「符合这个选择器的物件有几个」—— 枚举各区域，交给 符合选择器 */
+function 符合选择器的物件数(g: GameState, 来源: Obj | null, sel: Selector): number {
+  const 池: Obj[] = [...g.战场];
+  for (const p of g.players) 池.push(...p.hand, ...p.graveyard, ...p.library);
+  池.push(...g.放逐区);
+  // 特征不预计算：符合选择器 只读 o.def 的那部分（名称/势力/类别等）够用；计算特征 会递归回来
+  return 池.filter((x) => 符合选择器(g, x, sel, 来源, 来源?.操控者 ?? 0, undefined as never)).length;
 }
 
 export interface 特征 {
@@ -69,6 +90,12 @@ export interface 特征 {
   关键词: 关键词能力条目[];
   /** 034「所附属之单位于其操控者的重置步骤中不能重置」 */
   不能重置: boolean;
+  /** 层6 授予的「必须发起战斗」（096） */
+  必须发起战斗: boolean;
+  /** 层6 授予的「启动式能力不能启动」（025/075） */
+  不能启动能力: boolean;
+  /** 层6 授予的完整能力（106） */
+  获得能力: Ability[];
   失去所有能力: boolean;
   暗置: boolean;
   /** 层6 授予的特殊动作（【急行军】那种许可）；见 层修改.授予动作 */
@@ -107,7 +134,7 @@ function 基础特征(o: Obj): 特征 {
   if (o.面 === '暗置') {
     return {
       名称: '暗置领土', 超类别: [], 类别: ['领土'], 副类别: [],
-      势力: null, 武力: 0, 体力上限: 0, 关键词: [], 失去所有能力: false, 不能重置: false, 暗置: true, 授予动作: [],
+      势力: null, 武力: 0, 体力上限: 0, 关键词: [], 失去所有能力: false, 不能重置: false, 必须发起战斗: false, 不能启动能力: false, 获得能力: [], 暗置: true, 授予动作: [],
     };
   }
   const d = o.def;
@@ -129,6 +156,9 @@ function 基础特征(o: Obj): 特征 {
       .map((ab) => ({ 名称: ab.名称!, ...(ab.数值 !== undefined ? { 数值: ab.数值 } : {}), ...(ab.特征 !== undefined ? { 特征: ab.特征 } : {}), 印制: true })),
     失去所有能力: false,
     不能重置: false,
+    必须发起战斗: false,
+    不能启动能力: false,
+    获得能力: [],
     暗置: false,
     授予动作: [],
   };
@@ -290,20 +320,28 @@ function 无能力集合(g: GameState, 候选表: 候选效应[]): Set<number> {
  *
  * 带参数的用 数值（702.10 射击 N / 702.13 迎击 N / 702.6 坚韧 N…）。
  */
-export const 关键词解析表: Record<string, (n: number) => Ability> = {
+export const 关键词解析表: Record<string, (n: number | Value) => Ability> = {
   // 702.10b 射击 N：「{通常}{横置}→此单位对目标**斜对单位**造成 N 点伤害」
   射击: (n) => ({
     种类: '启动式', 时机: '通常', 费用: [{ 操作: '横置', 目标: '自身' }],
-    标签: '射击' + n + '：对目标斜对单位造成 ' + n + ' 点伤害',
+    标签: '射击' + String(n) + '：对目标斜对单位造成 ' + String(n) + ' 点伤害',
     目标: [{ 目标名: 't', 数量: { 最小: 1, 最大: 1 }, 选择: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '关系', 值: '斜对' }] } }],
     效应: [{ 操作: '伤害', 来源: '自身', 事件: [{ 受方: { 目标: 't' }, 点数: n }] }],
   } as unknown as Ability),
   // 702.7b 佩带 N：「{通常}N→将此装备佩带在由你操控的目标单位上。只可于此装备未佩带时启动」
   佩带: (n) => ({
-    种类: '启动式', 时机: '通常', 费用: [{ 操作: '支付', 点数: { 最小: n, 最大: n } }],
+    种类: '启动式', 时机: '通常', 费用: [{ 操作: '支付', 点数: { 最小: n as number, 最大: n as number } }],
     标签: '佩带' + n + '：佩带在由你操控的目标单位上',
     目标: [{ 目标名: 't', 数量: { 最小: 1, 最大: 1 }, 选择: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '操控者', 值: '你' }] } }],
     效应: [{ 操作: '原生', 模块: '佩带' }],
+  } as unknown as Ability),
+  // 702.12b 突击 N：「当此单位移动时，该单位对其**相对单位**造成 N 点伤害」
+  //   702.12c：转移 / 交换位置 / 任何效应造成的移动都算 —— 所以挂的是通用的「移动」事件
+  突击: (n) => ({
+    种类: '触发式', 触发: { 事件: '移动', 主体: '自身' },
+    标签: '突击' + n,
+    效应: [{ 操作: '伤害', 来源: '自身', 事件: [{ 受方: { selectAll: { 筛选: [
+      { 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '关系', 值: '相对' }] } }, 点数: n }] }],
   } as unknown as Ability),
   // 702.13b 迎击 N：「一个单位进入此单位的相对阵地时，对其造成 N 点伤害」
   迎击: (n) => ({
@@ -331,6 +369,9 @@ export const 关键词解析表: Record<string, (n: number) => Ability> = {
   暴击: (n) => ({ 种类: '静止式', 名称: '暴击', 数值: n }),
   压制: (n) => ({ 种类: '静止式', 名称: '压制', 数值: n }),
 转移: (n) => ({ 种类: '静止式', 名称: '转移', 数值: n }),
+  // 702.8a 破竹：静止式；**分伤害的规则在 engine.ts（带词 '破竹'）** —— 
+  //   这里只登记，否则印在牌面上的破竹会被 基础特征 的「能解析」过滤掉，702.8b 永远走不到
+  破竹: (n) => ({ 种类: '静止式', 名称: '破竹', 数值: n }),
   // 702.31b 叫阵：**行为在别处**（options.ts 列阵地表那一步）—— 这里只登记成关键词 ✓。
   //   ⚠ 2026-10 实测：没登记 → 骂阵兵 的 `特征.关键词 = []` → `有词(...,'叫阵')` 恒 false
   //   → options.ts 那段叫阵限制**从来没生效**（记录里：甲 左侧翼 骂阵兵，乙 却打到右边路）。
@@ -342,8 +383,8 @@ export const 关键词解析表: Record<string, (n: number) => Ability> = {
   // 702.69a 再起：**启动式**能力，「于具有再起能力的牌**在墓地中时**生效」
   //   702.69b 「{通常}[需求]<费用>→将此牌从你的墓地移回战场，他获得神速能力直到回合结束。
   //     在下一个结束步骤开始时，将他放逐。如果它将离场，则改为将其放逐。」
-  再起: (n) => ({ 种类: '启动式', 时机: '通常', 费用: [{ 操作: '支付', 点数: { 最小: n, 最大: n } }],
-    标签: '再起' + n + '：将此牌从墓地移回战场', 效应: [{ 操作: '原生', 模块: '再起' }] }),
+  再起: (n) => ({ 种类: '启动式', 区域: '墓地', 时机: '通常', 费用: [{ 操作: '支付', 点数: { 最小: n as number, 最大: n as number } }],
+    标签: '再起' + String(n) + '：将此牌从墓地移回战场', 效应: [{ 操作: '原生', 模块: '再起' }] }),
 };
 
 /** 引擎还不认识这个词 —— 展开不出来的就原样留着，不会崩，只是那句牌面失效 */
@@ -376,7 +417,7 @@ export function 解析能力(ab: Ability): Ability {
   if (!定) return ab;                                            // 没登记的沿用原样（不崩）
   if (尾巴 !== undefined && Number.isFinite(尾巴)) k.数值 = 尾巴;
   // ⚠ 展开后**要保留 名称/数值** —— 引擎里的判定点要用它（例：702.7b「只可于此装备未佩带时启动」）
-  return { ...定(k.数值 ?? 0), 名称: k.名称, ...(k.数值 !== undefined ? { 数值: k.数值 } : {}), ...(k.特征 ? { 特征: k.特征 } : {}) } as Ability;
+  return { ...定((k.数值 ?? 0) as number | Value), 名称: k.名称, ...(k.数值 !== undefined ? { 数值: k.数值 } : {}), ...(k.特征 ? { 特征: k.特征 } : {}) } as Ability;
 }
 /**
  * 这个实体有没有某个**关键词能力** —— 按名字查（名字由 702 章定义）。
@@ -399,7 +440,7 @@ export function 关键词数值(g: GameState, o: Obj, 名: string): number {
   //    授予时写的是「名字 + 数字」拼在一起的一个字符串，这里把尾巴上的数字解析出来。
   if (o.区域 !== '战场') return 0;
   for (const k of 计算特征(g, o).关键词) {
-    if (k.名称 === 名) return k.数值 ?? 0;
+    if (k.名称 === 名) return typeof k.数值 === 'number' ? k.数值 : (k.数值 !== undefined ? 层值(k.数值, o, g) : 0);
     // 层6 授予的写法是「名字 + 数字」拼在一起的一个字符串（'射击2'）
     if (k.名称.startsWith(名)) { const n = Number(k.名称.slice(名.length)); if (Number.isFinite(n)) return n; }
   }
@@ -597,7 +638,23 @@ function 取特征值(g: GameState | undefined, o: Obj, a: 筛选属性, f: 特�
     case '灵值': return d.灵值 === undefined ? [] : [d.灵值];
     case '武力': return [f.武力];
     case '体力上限': return [f.体力上限];
-    case '区域': return [o.区域];
+  case '区域': return [o.区域];
+  // 506-510：这张牌是不是**本次战斗的进攻单位**
+  case '进攻中': return [g?.当前进攻者 === o ? 1 : 0];
+  // 区域内的位置：牌库末尾 = 顶（抓牌从末尾取），下标 0 = 底。
+  //   ⚠ 其他区域（手牌/墓地/放逐区/战场）没有规则定义的顺序 → 返回空（筛选永不匹配），不猜。
+  case '距顶': {
+    if (o.区域 !== '牌库' || !g) return [];
+    const lib = g.players[o.owner]?.library ?? [];
+    const idx = lib.indexOf(o);
+    return idx < 0 ? [] : [lib.length - idx];
+  }
+  case '距底': {
+    if (o.区域 !== '牌库' || !g) return [];
+    const lib = g.players[o.owner]?.library ?? [];
+    const idx = lib.indexOf(o);
+    return idx < 0 ? [] : [idx + 1];
+  }
     case '面': return [o.面];
     case '已横置': return [o.tapped ? 1 : 0];
     default: return [];
@@ -619,10 +676,26 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
     case '非种类': return !符合种类0(String(c.值 ?? ''));
     case '相对阵地为空': {
       const 对面 = o.阵地 ? g.players[1 - 有效控制器(g, o)]?.阵地[相对阵地(o.阵地)!] : null;
-      return !对面;   // 值不看：条件本身就是「它自己的对面空着」✓
+      /**
+       * 默认（不写值）= 「对面空着」；`值: false` / `比较: '不是'` = **已对阵**（对面有单位）。
+       * ⚠ 以前这里**值不看** → 只能表达「未对阵」，063 迎头痛击就录不了。
+       */
+      const 要空 = c.比较 === '不是' ? false
+        : c.值 === undefined ? true
+        : !(c.值 === '否' || c.值 === 0);
+      return 要空 ? !对面 : !!对面;
     }
+    case '附属于':
+      return !!锚 && o.附属在 === 锚.uid;
+    case '佩带于':
+      return !!锚 && o.佩带在 === 锚.uid;
     case '操控者': {
       const 控 = 有效控制器(g, o);
+      // 值可以是 { 记忆: 键 }：读记住的玩家号（096「目标玩家的单位」）
+      if (c.值 && typeof c.值 === 'object' && '记忆' in c.值) {
+        const 存 = 记忆源?.记忆?.[(c.值 as { 记忆: string }).记忆];
+        return typeof 存 === 'number' ? 控 === 存 : false;
+      }
       const 谁 = String(c.值 ?? '任意');
       if (谁 === '任意') return true;
       if (控制器 === undefined) return false;
@@ -637,13 +710,17 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
     }
     case '关系': {
       if (!锚 || !锚.阵地) return false;
-      const 名 = String(c.值 ?? '相对');
+      // 值可以是数组：「相对或斜对」
+      const 名们 = (Array.isArray(c.值) ? c.值 : [c.值 ?? '相对']).map(String);
       const 锚阵地 = 锚.阵地;
       const 自己 = g.players[锚.操控者]!;
       const 敌 = g.players[(锚.操控者 + 1) % g.players.length]!;
-      const 允许 = 名 === '相对' ? [敌.阵地[相对阵地(锚阵地)!]]
-        : 名 === '相邻' ? 相邻阵地(锚阵地).map((x) => 自己.阵地[x])
-        : 斜对阵地(锚阵地).map((x) => 敌.阵地[x]);
+      const 允许: (Obj | null)[] = [];
+      for (const 名 of 名们) {
+        if (名 === '相对') 允许.push(敌.阵地[相对阵地(锚阵地)!]);
+        else if (名 === '相邻') 允许.push(...相邻阵地(锚阵地).map((x) => 自己.阵地[x]));
+        else 允许.push(...斜对阵地(锚阵地).map((x) => 敌.阵地[x]));
+      }
       return 允许.includes(o);
     }
     default: break;
@@ -707,6 +784,7 @@ let 算特征深度 = 0;
  * 计算一个物件的当前特征（613）。
  * 判断：可选的「只要…」条件求值器（由引擎注入，避免循环依赖）
  */
+
 export function 计算特征(g: GameState, o: Obj, 判断?: 条件判断): 特征 {
   return 计算到层(g, o, 7, 判断);
 }
@@ -829,12 +907,16 @@ function 计算特征内(g: GameState, o: Obj, 判断?: 条件判断, 上限层 
   if (上限层 >= 5) for (const c of 适用('层5', (x) => x.层.势力 !== undefined)) f.势力 = c.层.势力!.slice();
   // 层6：能力（613.3 特征定义能力先行，再按时间印记）
   const 层6 = (上限层 >= 6 ? 适用('层6', (x) => x.层.获得关键词 !== undefined || x.层.失去所有能力 !== undefined
-    || x.层.授予动作 !== undefined || x.层.不能重置 !== undefined) : []);
+    || x.层.授予动作 !== undefined || x.层.不能重置 !== undefined || x.层.必须发起战斗 !== undefined
+    || x.层.不能启动能力 !== undefined || x.层.获得能力 !== undefined) : []);
   层6.sort((a, b) => Number(b.是特征定义) - Number(a.是特征定义) || a.时间印记 - b.时间印记);
   for (const c of 层6) {
     if (c.层.失去所有能力) { f.失去所有能力 = true; }
     // 034 一蹶不振：「所附属之单位于其操控者的重置步骤中不能重置」
     if (c.层.不能重置) { f.不能重置 = true; }
+    if (c.层.必须发起战斗) { f.必须发起战斗 = true; }
+    if (c.层.不能启动能力) { f.不能启动能力 = true; }
+    if (c.层.获得能力) { f.获得能力 = [...f.获得能力, ...c.层.获得能力]; }
     // 702.1d：授予就是**把这个关键词能力加到它身上** —— 追加，**不去重**
     //   （702.6d 那批：多个同名关键词是多个各自独立的能力；吕范的例子就是两个射击2）
     if (c.层.获得关键词) {
@@ -851,8 +933,8 @@ function 计算特征内(g: GameState, o: Obj, 判断?: 条件判断, 上限层 
   if (上限层 < 7) return f;   // 只算到层6 为止
   // 层7a：特征定义能力（定义武力/体力）—— 613.4a
   for (const c of 适用('层7a', (x) => x.层.定义武力 !== undefined || x.层.定义体力 !== undefined)) {
-    if (c.层.定义武力 !== undefined) f.武力 = typeof c.层.定义武力 === 'number' ? c.层.定义武力 : 0;
-    if (c.层.定义体力 !== undefined) f.体力上限 = typeof c.层.定义体力 === 'number' ? c.层.定义体力 : 0;
+    if (c.层.定义武力 !== undefined) f.武力 = 层值(c.层.定义武力, o, g);
+    if (c.层.定义体力 !== undefined) f.体力上限 = 层值(c.层.定义体力, o, g);
   }
   // 层7b：设定为特定值
   for (const c of 适用('层7b', (x) => x.层.设定武力 !== undefined || x.层.设定体力 !== undefined)) {

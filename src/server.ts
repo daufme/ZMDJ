@@ -22,7 +22,7 @@ import {
 } from './engine/engine.js';
 import { 列出合法动作 } from './engine/options.js';
 import { 解析动作, type 线动作 } from './engine/解析动作.js';
-import { 可用启动式能力, 处于通常时机, 实际打出费用, 有效特征, 是类别, 决定先手, 宣告调度, 执行调度, 后手决定顶牌去向, 自动宣告, 记录, 可支付来源 } from './engine/engine.js';
+import { 可用启动式能力, 处于通常时机, 实际打出费用, 有效特征, 是类别, 决定先手, 自动宣告, 记录, 可支付来源, 候选目标, 取实体 } from './engine/engine.js';
 import { 有效控制器 } from './engine/continuous.js';
 import { 默认牌组, 缺牌替代 } from './data/decks.js';   // 初阵甲/初阵乙 只在 decks.ts 里当素材，服务端只用默认牌组
 import { 系列配置 } from './data/系列配置.js';
@@ -76,6 +76,7 @@ interface 座位 {
   /** 最后一次收到这个座位的请求的时刻。客户端每 1.2 秒轮询 /api/state，那次轮询就是心跳 */
   最后见到: number;
 }
+
 interface 房间 {
   号: string;
   甲: CardDef[]; 乙: CardDef[];
@@ -618,11 +619,16 @@ function 找牌(房: 房间, uid: number): Obj | undefined {
  */
 function 挂牌面(房: 房间, 需: 需求 | null, 座位: number | null): 需求 | null {
   if (!需) return null;
+  /**
+   * 「双方确认」的步骤（展示 / 判定）**本来就是公开牌面** —— 两个座位都要看到那张牌，
+   *   不能走 `可见()` 的私密判断（否则联机时非拥有者座位收到的是**背面**）。
+   */
+  const 公开 = !!(需 as { 等双方确认?: boolean }).等双方确认;
   for (const 槽 of 需.槽 ?? []) {
     for (const c of 槽.候选 ?? []) {
       if (typeof c.键 !== 'number' || !c.名) continue;
       const o = 找牌(房, c.键);
-      if (o) (c as { 卡?: unknown }).卡 = 卡(房, o, 可见(房, o, 座位));
+      if (o) (c as { 卡?: unknown }).卡 = 卡(房, o, 公开 || 可见(房, o, 座位));
     }
   }
   /**
@@ -694,6 +700,17 @@ function 视图(房: 房间, 座位: number | null = null) {
     // 400：放逐区由所有玩家共享，明置且任何人都能检视（406.3）
     放逐区: 房.g.放逐区.map((c) => 卡v(c)),
     放逐张数: 房.g.放逐区.length,
+    /**
+     * 701.25：判定牌是**公开**的 —— 判定展示期间所有人都看得到。
+     * 这里直接按 uid 找物件发牌面（不走可见登记：那是私密表）。
+     */
+    判定牌: (() => {
+      const u = 房.g.判定中?.uid;
+      if (u === undefined) return null;
+      const o = 房.g.players.flatMap((p) => [...p.library, ...p.hand, ...p.graveyard])
+        .concat(房.g.战场).concat(房.g.放逐区).find((c) => c.uid === u);
+      return o ? 卡v(o) : null;
+    })(),
     // 401/402：隐藏区的牌只有**登记过的**玩家看得到 —— 可见性判断只在这一处。
     //   103.6 的「后手检视自己牌库顶」和 031 黑水祭天模式 1 都往 g.可见登记 里登记，
     //   所以一份就够；每个检视效果各写一遍判断的话，漏一处就是信息泄露。
@@ -757,7 +774,7 @@ function 视图(房: 房间, 座位: number | null = null) {
       if (双方) return !(双方确认.get(房) ?? []).includes(座位);            // 展示：还没确认的那一方就能动 ✓
       return 房.当前.玩家 === 座位;                                        // 其余：只有这一步的玩家 ✓
     })(),
-    合法动作: 房.当前 && !房.当前.决定
+    合法动作: (房.当前 && !房.当前.决定)
       ? 合并同族动作(列出合法动作(房.g, 房.当前.玩家, 房.当前.时机)).map((a) => ({
           ...a,
           // ⚠ 把 `可支付来源()` 的**原对象**交下去 ✓（带 `提供`）—— 收发层要靠它给「支付源」的候选配 `量` ✓
@@ -791,7 +808,7 @@ function 视图(房: 房间, 座位: number | null = null) {
 
 // 线格式动作 → 引擎 Action 的解析在 engine/解析动作.ts（那里能单元测试 ——
 //   ⚠ 不能放在这个文件里：server.ts 一被 import 就开 HTTP 服务器，导入即启动）。
-function 应用(房: 房间, 体: 线动作, 座位: number | null = null): { ok: boolean; 错误?: string } {
+export function 应用(房: 房间, 体: 线动作, 座位: number | null = null): { ok: boolean; 错误?: string } {   // 导出：给离线校验脚本用s' 做单元测试
   if (!房.当前) return { ok: false, 错误: '现在不需要任何人做决定' };
   const p = 房.当前.玩家;
   // 联机时只能替自己的座位动作；热座（座位 null）不限制
@@ -812,6 +829,30 @@ function 应用(房: 房间, 体: 线动作, 座位: number | null = null): { ok
   const 起 = Date.now();
   const r = 解析动作(房.g, p, 体);
   if (!r.ok) { 写记录({ 类: '收-拒绝', 错误: r.错误, 人读: '✗ ' + (r.错误 ?? '') }); 应用中 = 之前应用中; return { ok: false, 错误: r.错误 }; }
+  /**
+   * **依赖目标要配对**（050 螺旋突刺）—— 候选里能算出来不代表允许乱配：
+   *   第二目标必须真的是**第一目标的**相对或斜对单位；不配对就整次施放打回。
+   */
+  if (r.动作.种类 === '施放') {
+    const 规格 = r.动作.card.def.能力?.目标 ?? [];
+    for (let i = 0; i < 规格.length; i++) {
+      const sp = 规格[i]!;
+      if (!sp.依赖) continue;
+      const ai = 规格.findIndex((x) => x.目标名 === sp.依赖);
+      const 选 = r.动作.目标[i];
+      const 锚 = ai >= 0 ? r.动作.目标[ai] : undefined;
+      if (选 === undefined) continue;                       // 这个槽没选（可选槽）
+      if (ai < 0 || 锚 === undefined || typeof 锚 === 'number' || typeof 选 === 'number') {
+        应用中 = 之前应用中;
+        return { ok: false, 错误: '第二目标缺少配对的第一目标' };
+      }
+      const 锚物 = 取实体(锚 as never);
+      const 选物 = 取实体(选 as never);
+      if (!锚物 || !选物) { 应用中 = 之前应用中; return { ok: false, 错误: '第二目标缺少配对的第一目标' }; }
+      const 合 = 候选目标(房.g, p, sp, 锚物).some((c) => c.obj === 选物);
+      if (!合) { 应用中 = 之前应用中; return { ok: false, 错误: sp.目标名 + ' 必须是「' + sp.依赖 + '」的相对或斜对单位' }; }
+    }
+  }
   // ⚠ **展示这类步骤：双方都确认了才继续** ✓（同一套机制覆盖联机与热座 ✓）
   //   联机：各自按自己的确认 ✓（谁按的由令牌决定 ✓）；
   //   热座：一屏两个按钮 ✓（动作里带 `确认座位` ✓ 说明替哪个座位按的 ✓）。

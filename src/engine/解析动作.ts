@@ -124,8 +124,6 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
         接受: () => 是布尔(体.接受),
         弃牌: () => 数字数组(体.弃牌),
         选: () => 选择数组(体.选),
-        先手: () => 零或一1(体.先手),      // 103.1 决定先手
-        张数: () => 数字1(体.张数),        // 103.4 调度宣告
       } satisfies 全字段表<'决定'>;
       return { ok: true, 动作: 造(表) as unknown as Action };
     }
@@ -173,6 +171,18 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
         阵地: () => 取首(体.阵地) as 阵地 | undefined,
         模式号: () => 数字1(体.模式号),
         X: () => X,
+      // 601.2f：额外费用选择（每项 { 操作, uid }）—— 旧字段 额外牺牲 兼容成一条「牺牲」
+      额外: () => {
+        const 出: { 操作: string; uid?: number }[] = [];
+        for (const x of 是数组(体.额外)) {
+          if (!x || typeof x !== 'object') continue;
+          const 操作 = String((x as { 操作?: unknown }).操作 ?? '');
+          const uid = 数字1((x as { uid?: unknown }).uid);
+          if (操作) 出.push({ 操作, ...(uid !== undefined ? { uid } : {}) });
+        }
+        for (const uid of 数字数组(体.额外牺牲) ?? []) 出.push({ 操作: '牺牲', uid });
+        return 出.length ? 出 : undefined;
+      },
       额外牺牲: () => 数字数组(体.额外牺牲),
         支付源: () => (源.length ? 源 : undefined),
       } satisfies 全字段表<'施放'>;
@@ -238,9 +248,7 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
         模式号: () => 数字1(体.模式号),
         费用弃牌: () => 数字数组(体.费用弃牌),
         费用牺牲: () => 数字数组(体.费用牺牲),
-        费用弃牌数: () => 数字1(体.费用弃牌数),
-        费用牺牲数: () => 数字1(体.费用牺牲数),
-      费用X: () => !!体.费用X,
+        费用横置: () => 数字数组(体.费用横置),
       宣告X: () => 宣告X,
   费用步进: () => (体.费用步进 as { 偏移: number; 步进: number } | undefined),
       } satisfies 全字段表<'启动能力'>;

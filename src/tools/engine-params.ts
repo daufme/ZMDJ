@@ -1,9 +1,21 @@
+/**
+ * **引擎参数表** —— 把「卡数据里能写什么」全部列出来（操作 / 字段 / 取值）。
+ *
+ * ⚠ 这份表是**从 `src/engine/types.ts` 里抽出来的**，不是手抄的 ——
+ *   手抄的表会跟代码漂开（这次就因为我自己编词翻过车）。
+ *   字段名和取值来自类型定义本身；说明来自类型上方的注释。
+ *
+ * 用法（两种输出）：
+ *   · `node dist/tools/engine-params.js`         —— 控制台文本（查字段用）
+ *   · `node dist/tools/engine-params.js --md > 引擎参数.md` —— 生成给人看的文档
+ *   `--详细` 连完整类型文本一起打（默认只打类型名/字面量）。
+ */
 import * as ts from 'typescript';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const 详细 = process.argv.includes('--详细');
-const 是md = process.argv.includes('--md');
+const 是md = process.argv.includes('--md');   // Markdown 模式下**不打**控制台标题，免得混进文档
 const 根 = path.resolve(import.meta.dirname, '..', '..');
 const 源 = fs.readFileSync(path.join(根, 'src', 'engine', 'types.ts'), 'utf8');
 const 文件 = ts.createSourceFile('types.ts', 源, ts.ScriptTarget.ESNext, true);
@@ -71,9 +83,11 @@ const 打声明 = (名: string, 标题: string): void => {
   if (d.联合体.length) console.log('  ' + d.联合体.join('　|　'));
 };
 
+// ── ① 操作（步骤主体 的每个成员 = 一个 操作）──
+
 if (!是md) console.log('════════ 一、操作（卡数据里 效应/牌效应 能写的 操作）════════');
 const 操作表: { 操作: string; 类型: string; 说明: string; 成员: 成员[] }[] = [];
-
+/** 收一个「有 操作 字段」的类型字面量/接口 */
 const 收操作 = (节点: ts.TypeNode | ts.InterfaceDeclaration, 类型名_: string): void => {
   const 是接口 = ts.isInterfaceDeclaration(节点);
   const 成员节点 = (是接口 ? 节点.members : (节点 as ts.TypeLiteralNode).members);
@@ -89,7 +103,7 @@ const 收操作 = (节点: ts.TypeNode | ts.InterfaceDeclaration, 类型名_: st
   }
   for (const 名 of 操作字面) 操作表.push({ 操作: 名, 类型: 类型名_, 说明, 成员 });
 };
-
+// 来源一：联合体里**内联写出**的对象类型（大多数操作是这么写的）
 for (const d of 声明表.values()) {
   const 原 = 文件.statements.find((x) => ts.isTypeAliasDeclaration(x) && x.name.text === d.名);
   if (!原 || !ts.isTypeAliasDeclaration(原) || !原.type) continue;
@@ -99,14 +113,14 @@ for (const d of 声明表.values()) {
   };
   展(原.type);
 }
-
+// 来源二：具名接口（DamageOp 这种）
 for (const d of 声明表.values()) {
   const 有操作 = d.成员.find((m) => m.名 === '操作');
   if (!有操作) continue;
   const 各 = [...有操作.类型.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
   for (const 名 of 各) if (!操作表.some((x) => x.操作 === 名)) 操作表.push({ 操作: 名, 类型: d.名, 说明: d.说明, 成员: d.成员.filter((m) => m.名 !== '操作') });
 }
-
+// ── --md：出 Markdown 文档（人看的），出完就结束 ──
 if (process.argv.includes('--md')) {
   const 表: string[] = [];
   const 行 = (x = ''): void => { 表.push(x); };
@@ -151,7 +165,7 @@ if (process.argv.includes('--md')) {
   if (其他.length) 打操作('其他', 其他);
   行('## 常用词汇');
   行();
-  for (const 名 of ['Selector', 'TargetSpec', '筛选条件', 'Condition', 'Trigger', 'Cost', '层修改', 'ReplacementSpec', '指示物定义', '规则限制', '关键词能力']) {
+  for (const 名 of ['Selector', 'TargetSpec', '筛选条件', 'Condition', 'Trigger', '费用行为', '层修改', 'ReplacementSpec', '指示物定义', '规则限制', '关键词能力']) {
     const d = 声明表.get(名);
     if (!d) continue;
     行('### ' + 名);
@@ -186,10 +200,11 @@ if (process.argv.includes('--md')) {
   process.exit(0);
 }
 操作表.sort((a, b) => a.类型.localeCompare(b.类型) || a.操作.localeCompare(b.操作, 'zh'));
-
+// ⚠ 「条件」那个联合体里的成员也有 操作 字段（=、<、与、或…）—— 那是**条件运算**，不是效应操作，
+//   按来源联合体分开打，别混在一起（第一版就是这么混的）。
 const 分组 = new Map<string, typeof 操作表>();
 for (const o of 操作表) {
-
+  // 步骤主体 引用的具名接口（DamageOp）也算效应操作；Condition 那支是条件运算，单独分。
   const 效应类 = ['步骤主体', 'DamageOp', 'ResolvedStep', '效应步骤'];
   const 组 = 效应类.includes(o.类型) ? '效应/牌效应里能写的操作'
     : o.类型 === 'Condition' ? '条件（Condition）里的运算'
@@ -212,6 +227,7 @@ for (const [组, 表] of 分组) {
   }
 }
 
+// ── ② 其余词汇表 ──
 console.log('');
 console.log('════════ 二、其余常用词汇 ════════');
 打声明('Selector', '选择器（描述一批物件）');
@@ -219,7 +235,7 @@ console.log('════════ 二、其余常用词汇 ═════�
 打声明('筛选条件', '筛选条件的一条');
 打声明('Condition', '条件');
 打声明('Trigger', '触发');
-打声明('Cost', '费用（602.1d：「→」前的一切）');
+打声明('费用行为', '费用行为（602.1d：「→」前的一切，按列表顺序支付）');
 打声明('层修改', '层修改（613）');
 打声明('ReplacementSpec', '替代/防止（614/615）');
 打声明('指示物定义', '指示物（112.3）');
@@ -230,6 +246,7 @@ for (const 名 of ['筛选属性', '筛选比较', '阵地关系', 'CardType', '
   if (d && d.联合体.length) { console.log(''); console.log('  ' + 名 + '：' + d.联合体.join('　|　')); }
 }
 
+// ── ③ 运行时才有的表（关键词展开等）──
 console.log('');
 console.log('════════ 三、关键词（702 章，引擎按名字查）════════');
 try {
