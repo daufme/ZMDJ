@@ -9,7 +9,7 @@
  *   状态里塞判断逻辑的代价是「谁都能改，谁也不知道什么时候改的」。
  */
 import type { TargetSpec } from './types.js';
-import type { CardType, Faction, 筛选, 层修改, CardDef, 阵地, SupportMap, Support, Selector, 事件名, 玩家动作, ReplacementSpec } from './types.js';
+import type { CardType, Faction, 筛选, 层修改, CardDef, 阵地, SupportMap, Support, Selector, 事件名, 玩家动作, ReplacementSpec, 规则限制 } from './types.js';
 // ⚠ 循环 import：continuous.ts 也 import 本文件。ESM 的实时绑定 + 只在函数体内调用，运行时安全。
 import { 有效控制器 } from './continuous.js';
 import { 阵地顺序 } from './types.js';
@@ -237,6 +237,11 @@ export interface PlayerState {
    * 由 `限制玩家` 操作 写入（【过河拆桥】「目标玩家本回合不能打出非领土牌」）。
    */
   限制: { 禁止: 玩家动作; 筛选?: 筛选; 到期: number }[];
+  /**
+   * **这个玩家无视哪些规则限制**（103 古铜镇尺：付 2 的玩家无视「不能搜寻」直到回合结束）。
+   * `来源` = 只无视那个物件的限制；省略 = 所有来源。到期之后查询时自动失效。
+   */
+  豁免?: { 禁止: 规则限制['禁止']; 来源?: number; 到期: number }[];
   landsPlayedThisTurn: number;
   /** 因试图从空牌库抓牌而待判负（704.5b） */
   drewFromEmptyLibrary: boolean;
@@ -275,6 +280,8 @@ export interface StackItem {
    *   所以也不产生「被指定为目标」这类事件（115.9 只看 目标槽）。
    */
   本次选择?: (Obj | number | string)[];
+  /** 本步操作产出的东西（供公共 `记到` 写记忆；每步用完清空） */
+  产物?: unknown;
   /** 「重复」步的轮次计数（按 步骤游标 记），挂起后恢复用 */
   重复轮?: Record<number, number>;
   /** 这一步挑领土付钱时，答复里带的支付源（本步用掉即清） */

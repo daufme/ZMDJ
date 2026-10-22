@@ -19,7 +19,7 @@ import { 解析能力, 有效控制器, 符合筛选 } from './continuous.js';
 import type { ActivatedAbility } from './types.js';
 import {
   有效能力列表,
-  能打出领土, 能施放, 候选目标, 能转移, 能移动许可, 转移关键词目标, 许可目标, 转移目标, 可支付数字费用,能发起战斗, 合法攻击对象, 可用启动式能力, 处于通常时机,
+  能打出领土, 能打出, 候选目标, 能转移, 能移动许可, 转移关键词目标, 许可目标, 转移目标, 可支付数字费用,能发起战斗, 合法攻击对象, 可用启动式能力, 处于通常时机,
   type 时机选项,
   可支付上限, 实际打出费用, 有词, 能填满所有槽, 展开依赖规格, type 候选 as 引擎候选,
 } from './engine.js';
@@ -36,7 +36,7 @@ export interface 候选 {
 }
 
 export interface 合法动作 {
-  种类: '打领土' | '施放' | '启动能力' | '发起战斗' | '让过' | '转移';
+  种类: '打领土' | '打出' | '启动能力' | '发起战斗' | '让过' | '转移';
   uid?: number;
   能力索引?: number;
   /** 700.2b：启动式能力的模式是**作为进入堆叠的一部分**选的 —— 一个模式一条动作，界面不用再问 */
@@ -97,10 +97,10 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
   // 304.1：打出领土要「通常时机」，而通常时机要求堆叠为空（117.1b/117.1c）。
   // 所以【魏新兵】还在堆叠里时不能打领土，必须等它结算完。
   if (opts.允许打领土 && g.stack.length === 0) {
-    for (const o of me.hand) {
+  for (const o of me.hand) {
       // ⚠ **明置和暗置各是一条**（304.4a / 304.4b），`面` 直接写在动作里。
       //   以前领土牌只给一条「打出领土」+ `可暗置: true`，把「明置还是暗置」留给界面**再问一次** ——
-      //   于是领土牌要两步（打出领土 → 选明置/暗置），而非领土牌（走下面那支 + 施放）是一步列完的。
+      //   于是领土牌要两步（打出领土 → 选明置/暗置），而非领土牌（走下面那支 + 打出）是一步列完的。
       //   同一件事两种交互，已经统一：**能打几条就给几条**，界面只管列出来。
       if (能打出领土(g, p, o, '明置')) {
         out.push({ 种类: '打领土', uid: o.uid, 面: '明置', 标签: '打出领土 ' + o.def.全名 });
@@ -134,18 +134,28 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
     }
   }
 
-  for (const o of me.hand) {
+  // 手牌 + 本回合被授权「可从放逐区打出」的牌（045 诸葛亮）
+  const 可打出牌 = [...me.hand, ...g.放逐区.filter((o) =>
+    (g.本回合可打出 ?? []).some((x) => x.uid === o.uid && x.回合 === g.turn))];
+  for (const o of 可打出牌) {
     if (o.def.类别.includes('领土')) continue;
-    if (!能施放(g, p, o).ok) continue;
+    if (!能打出(g, p, o).ok) continue;
     // 601.2f：额外费用列表（这里先取出来，下面既用于「付不付得起」也用于开槽）
   const 额外费们 = (o.def.额外费用 ?? []) as 费用行为[];
   const 额外支付 = 额外费们.reduce((n, f) => n + (f.操作 === '支付' ? 费用点数值(f.点数, 0) : 0), 0);
   // 108.3a：费用带 X 的牌，X 由操控者打出时宣告（最小 0），所以按 0 判它能不能打
     const 是X = 牌面费用值(o.def.打出费用) === 'X';
+    // 依赖X（095 溅血斩）：候选那一侧的取值 —— 目标的该属性必须等于宣告的 X
+    const X数 = (x: { def: { 打出费用?: unknown } }): number => {
+      const v = 牌面费用值(x.def.打出费用 as never);
+      return typeof v === 'number' ? v : 0;   // 108.3g：带 X 的牌在堆叠外 X 视同 0
+    };
     // 604：**实际费用**（含费用修正，例如【李典】的加价）—— 客户端照它决定要挑几块地
     if (!可支付数字费用(g, p, (是X ? 0 : 实际打出费用(g, p, o.def)) + 额外支付)) continue;
     const 目标规格: { 目标名: string; 数量: { 最小: number; 最大: number }; 候选: 候选[];
-      依赖?: string; 按锚?: Record<string, (number | string)[]> }[] = [];
+      依赖?: string; 按锚?: Record<string, (number | string)[]>;
+      /** 本槽候选的该属性必须等于本牌宣告的 X（095）；候选项带 `需X`，客户端按已选 X 过滤 */
+      按X?: string }[] = [];
     let 可行 = true;
     // ⚠ **一起看**：各槽能不能同时填满（一个物件只能进一个槽）。各查各的会让
     //   129 貂蝉那种「两个槽条件一样」在只有一个合法物件时被误判成可行。
@@ -160,10 +170,13 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       目标规格.push({
         目标名: spec.目标名, 数量: spec.数量,
         候选: c.map((x) => x.obj
-          ? { 类型: '实体' as const, uid: x.obj.uid, 名称: x.obj.def.全名 }
+          ? { 类型: '实体' as const, uid: x.obj.uid, 名称: x.obj.def.全名,
+              ...(spec.依赖X ? { 需X: X数(x.obj) } : {}) }
         : x.堆叠项 !== undefined ? { 类型: '堆叠项' as const, uid: -x.堆叠项, 名称: '（能力）' }
           : { 类型: '玩家' as const, 玩家: x.玩家!, 名称: g.players[x.玩家!]!.name }),
-        ...(spec.依赖 ? { 依赖: spec.依赖 } : {}),
+        ...(spec.标签 ? { 标签: spec.标签 } : {}),
+  ...(spec.依赖 ? { 依赖: spec.依赖 } : {}),
+        ...(spec.依赖X ? { 按X: spec.依赖X } : {}),
         ...(it.映射 ? { 按锚: Object.fromEntries([...it.映射].map(([k, v]) => [
             k.startsWith('o') ? Number(k.slice(1)) : k.startsWith('p') ? '玩家' + k.slice(1) : Number(k.slice(1)),
             v.map(转键)])) } : {}),
@@ -229,8 +242,8 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
     // 旧字段（109 舍生取义）继续给：取「牺牲」那一条
     const 额外牺牲费 = 取费用行为(o.def.额外费用, '牺牲');
     out.push({
-      种类: '施放', uid: o.uid,
-       标签: '施放 ' + o.def.全名 + '（费用 ' + (是X ? 'X' : 实际打出费用(g, p, o.def)) + '）',
+      种类: '打出', uid: o.uid,
+       标签: '打出 ' + o.def.全名 + '（费用 ' + (是X ? 'X' : 实际打出费用(g, p, o.def)) + '）',
       目标规格: 目标规格.length ? 目标规格 : undefined,
       需要阵地: 阵地表,
       // 108.3a：费用带 {X} 的牌，界面要问玩家宣告多少（上限 = 现在付得起的）
@@ -252,7 +265,9 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
   // 506.1 / 108.9：只能在通常时机（行动阶段、非战斗流程中、堆叠为空）发起战斗
   // 602 启动式能力
   //   702.69a：再起「于具有再起能力的牌**在墓地中时**生效」—— 所以墓地也要扫
-  for (const o of [...g.战场.filter((x) => 有效控制器(g, x) === p), ...me.graveyard]) {
+  // ⚠ 整个战场都要扫：可启动者:'任意' 的能力（103 古铜镇尺）得对所有人列出；
+  //   普通能力由 可用启动式能力 的 能由启动 过滤掉。墓地仍只扫自己的（再起）。
+  for (const o of [...g.战场, ...me.graveyard]) {
     for (const i of 可用启动式能力(g, p, o)) {
       // ⚠ 下标来自 可用启动式能力 = **有效能力列表**的下标（含关键词展开 / 层6 授予的能力）；
       //   以前拿 `o.def.能力?.能力[i]` 取 → 有印制关键词时整个错位。

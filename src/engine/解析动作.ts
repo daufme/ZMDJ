@@ -129,6 +129,7 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
     }
 
     case '打领土': {
+      // 手牌，或本回合被授权「可从放逐区打出」的牌（045 诸葛亮）
       const o = 手上(体.uid);
       if (!o) return { ok: false, 错误: '手牌里没有这张牌' };
       const 表 = { 种类: () => '打领土', card: () => o, 面: () => (体.面 === '暗置' ? '暗置' : '明置') } satisfies 全字段表<'打领土'>;
@@ -142,8 +143,9 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
       return { ok: true, 动作: 造(表) as unknown as Action };
     }
 
-    case '施放': {
-      const o = 手上(体.uid);
+    case '打出': {
+      // 手牌，或本回合被授权「可从放逐区打出」的牌（045 诸葛亮）
+      const o = 找任意区域物件(g, Number(体.uid));
       if (!o) return { ok: false, 错误: '手牌里没有这张牌' };
       const 目标表: 目标[] = [];
       for (const t of 是数组(体.目标) as Record<string, unknown>[]) {
@@ -163,11 +165,24 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
       //   线上给了 X 就用它 ✓，没给就按支付源推导 ✓（客户端不再自己算 ✗）。
       const X = 牌面费用值(o.def.打出费用) === 'X' ? (数字1(体.X) ?? 源提供(g, p, 源)) : 数字1(体.X);
       const 需付 = 牌面费用值(o.def.打出费用) === 'X' ? (X ?? 0) : 实际打出费用(g, p, o.def);
+      // 依赖X（095 溅血斩「费用值为 X 的目标单位」）：目标的该属性必须**严格等于**宣告的 X
+      if (X !== undefined) {
+        const 规格 = (o.def.能力?.目标 ?? []) as { 目标名: string; 依赖X?: string }[];
+        for (let i = 0; i < 规格.length; i++) {
+          const sp = 规格[i]!;
+          if (!sp.依赖X) continue;
+          const t = 目标表[i];
+          if (!t || typeof t === 'number' || '堆叠项' in t) continue;
+          const v = 牌面费用值(t.def.打出费用);
+          const n = typeof v === 'number' ? v : 0;   // 108.3g：带 X 的牌在堆叠外 X 视同 0
+          if (n !== X) return { ok: false, 错误: '目标「' + t.def.全名 + '」的' + sp.依赖X + '是 ' + n + '，与宣告的 X（' + X + '）不相等' };
+        }
+      }
       if (需付 > 0 && 源.length === 0) {
         return { ok: false, 错误: '这张牌要付 ' + 需付 + ' 点数字费用，请先挑要启动的领土（304.8）' };
       }
       const 表 = {
-        种类: () => '施放', card: () => o, 目标: () => 目标表,
+        种类: () => '打出', card: () => o, 目标: () => 目标表,
         阵地: () => 取首(体.阵地) as 阵地 | undefined,
         模式号: () => 数字1(体.模式号),
         X: () => X,
@@ -185,7 +200,7 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
       },
       额外牺牲: () => 数字数组(体.额外牺牲),
         支付源: () => (源.length ? 源 : undefined),
-      } satisfies 全字段表<'施放'>;
+      } satisfies 全字段表<'打出'>;
       return { ok: true, 动作: 造(表) as unknown as Action };
     }
 
@@ -198,13 +213,14 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
     }
 
     case '启动能力': {
-      const o = 场上(体.uid);
+      // 来源可以在任何区域：墓地启动（051 大乔 / 702.69a 再起）也要找得到；区域是否合法由引擎校验
+      const o = 找任意区域物件(g, Number(体.uid));
       if (!o) return { ok: false, 错误: '找不到该实体' };
       // 117.1a / 117.1b：{瞬发}的能力随时可用；{通常}的能力要求通常时机
       if (!可用启动式能力(g, p, o).includes(体.能力索引 as number)) {
         return { ok: false, 错误: '这个能力现在不能启动（时机、费用或限制不满足）' };
       }
-      // 数字费用同样要**玩家自己挑地**（和施放一致，不再有自动支付）
+      // 数字费用同样要**玩家自己挑地**（和打出一致，不再有自动支付）
       const ab = (o.def.能力?.能力 ?? [])[体.能力索引 as number] as { 费用?: 费用行为[] } | undefined;
       const 源 = 数字数组(体.支付源) ?? [];
       const 支付 = 支付费用(ab?.费用);

@@ -22,7 +22,7 @@
  */
 import type { CardType, Faction, Supertype, 筛选, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 历史条件, 筛选比较, Value } from './types.js';
 import { 牌面费用值 } from './费用.js';
-import type { GameState, Obj } from './state.js';
+import type { GameState, Obj, StackItem } from './state.js';
 import { 相对阵地, 相邻阵地, 斜对阵地, 加事件记录, 写事件记录, 盖章 } from './state.js';
 import type { 阵地 } from './types.js';
 
@@ -216,11 +216,11 @@ function 收集候选(g: GameState): 候选效应[] {
           //
           // ⚠ 卡面是「只要你**操控**其他【同名】」—— **计数必须只算同一个操控者的**。
           //   以前这里只比名字、**没比操控者**，于是**对手**打出同名单位也会给你 +1
-          //   （【魏新兵】就撞上过：对方施放魏新兵，我这边的魏新兵白涨 1 点武力）。
+          //   （【魏新兵】就撞上过：对方打出魏新兵，我这边的魏新兵白涨 1 点武力）。
           //   用 有效控制器 而不是 o.操控者 —— 操控权可能被效应改过。
           // ⚠ **不能调 有效控制器** —— 它 → 计算特征 → 收集候选 → 又回到这里；
           //   而防重入（算操控权中）只保护**同一个 uid**，遍历到的每个 x 都不一样，挡不住 → 死循环。
-          //   施放【魏新兵】卡死就是这么来的。和上面 702.28b 同袍那条一样：只读**基础操控者**。
+          //   打出【魏新兵】卡死就是这么来的。和上面 702.28b 同袍那条一样：只读**基础操控者**。
           const 我 = o.操控者;
           const 其他 = g.战场.filter((x) =>
             x !== o && x.操控者 === 我 && x.def.名称.some((n) => o.def.名称.includes(n))).length;
@@ -696,8 +696,10 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
         const 存 = 记忆源?.记忆?.[(c.值 as { 记忆: string }).记忆];
         return typeof 存 === 'number' ? 控 === 存 : false;
       }
-      const 谁 = String(c.值 ?? '任意');
-      if (谁 === '任意') return true;
+      // 数字 = 具体玩家号（来自 {目标}/{记忆} 代换）
+      if (typeof c.值 === 'number') return 控 === c.值;
+      if (c.值 === undefined) return false;
+      const 谁 = String(c.值);
       if (控制器 === undefined) return false;
       if (谁 === '你') return 控 === 控制器;
       if (谁 === '对手') return 控 !== 控制器;
@@ -759,6 +761,91 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
  *
  * `f` 不给就现算（要 `判断` 回调求值「只要…」条件；engine 那边有）。
  */
+/** 筛选的主体域 —— 同一个条件结构，按域求值 */
+export type 筛选域 = '物件' | '玩家' | '阵地';
+
+/** 判定上下文：锚/触发受方/记忆源都从 item 来，数据只写条件 */
+export interface 判定上下文 {
+  g: GameState;
+  控制器: number;
+  item?: StackItem;
+  锚?: Obj | null;
+  触发受方?: Obj | number;
+  记忆源?: Obj;
+  /** 已经算好的特征（目标选择那边会传，省一次重算） */
+  特征?: 特征;
+  /** 阵地域：这个阵地属于谁的半场 */
+  半场?: number;
+}
+
+function 比较数或值(有的: number | string, c: 筛选条件): boolean {
+  const 比较 = c.比较 ?? '是';
+  const 列 = Array.isArray(c.值) ? c.值 : [c.值];
+  switch (比较) {
+    case '是': return 列.some((v) => String(v) === String(有的));
+    case '不是': return !列.some((v) => String(v) === String(有的));
+    case '大于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 > v);
+    case '大于等于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 >= v);
+    case '小于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 < v);
+    case '小于等于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 <= v);
+    default: return false;
+  }
+}
+
+function 符合玩家条件(ctx: 判定上下文, p: number, c: 筛选条件): boolean {
+  const pl = ctx.g.players[p];
+  if (!pl) return false;
+  switch (c.属性) {
+    case '种类': return (Array.isArray(c.值) ? c.值 : [c.值]).includes('玩家');
+    case '座位': return 比较数或值(p, c);
+    case '体力': return 比较数或值(pl.体力, c);
+    case '体力上限': return 比较数或值(pl.lifeMax, c);
+    case '手牌数': return 比较数或值(pl.hand.length, c);
+    case '操控者': {
+      const 谁 = String(c.值 ?? '你');
+      const 是 = 谁 === '你' ? p === ctx.控制器 : 谁 === '对手' ? p !== ctx.控制器 : p === Number(谁);
+      return (c.比较 ?? '是') === '不是' ? !是 : 是;
+    }
+    default: return false;
+  }
+}
+
+function 符合阵地条件(ctx: 判定上下文, s: 阵地, c: 筛选条件): boolean {
+  const 主 = ctx.半场 ?? ctx.控制器;
+  switch (c.属性) {
+    case '空': {
+      const 空 = !ctx.g.players[主]?.阵地[s];
+      return String(c.值) === 'false' || c.比较 === '不是' ? !空 : 空;
+    }
+    case '归属者': {
+      const 谁 = String(c.值 ?? '你');
+      const 是 = 谁 === '你' ? 主 === ctx.控制器 : 谁 === '对手' ? 主 !== ctx.控制器 : 主 === Number(谁);
+      return (c.比较 ?? '是') === '不是' ? !是 : 是;
+    }
+    case '关系': {
+      const 锚位 = ctx.锚 && ctx.锚.阵地 ? ctx.锚.阵地 : null;
+      if (!锚位) return false;
+      const 值 = String(c.值 ?? '相邻');
+      const 位 = 值 === '相邻' ? 相邻阵地(锚位)
+        : 值 === '斜对' ? 斜对阵地(锚位)
+        : 值 === '相对' ? [相对阵地(锚位)].filter((x): x is 阵地 => x !== null)
+        : [];
+      return 位.includes(s);
+    }
+    default: return false;
+  }
+}
+
+/** 唯一求值入口：按域分派（物件走现成的 符合筛选） */
+export function 符合域(ctx: 判定上下文, 主体: Obj | number | 阵地, 域: 筛选域, 条件?: 筛选): boolean {
+  if (!条件 || !条件.length) return true;
+  if (域 === '物件') {
+    return 符合筛选(ctx.g, 主体 as Obj, 条件, ctx.特征, undefined, ctx.记忆源, ctx.锚 ?? null, ctx.控制器, ctx.触发受方);
+  }
+  if (域 === '玩家') return 条件.every((c) => 符合玩家条件(ctx, 主体 as number, c));
+  return 条件.every((c) => 符合阵地条件(ctx, 主体 as 阵地, c));
+}
+
 export function 符合筛选(g: GameState, o: Obj, 条件表?: 筛选, f?: 特征, 判断?: 条件判断, 记忆源?: Obj,
   锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number): boolean {
   if (!条件表 || 条件表.length === 0) return true;

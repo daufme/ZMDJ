@@ -22,13 +22,14 @@ import {
 } from './engine/engine.js';
 import { 列出合法动作 } from './engine/options.js';
 import { 解析动作, type 线动作 } from './engine/解析动作.js';
-import { 可用启动式能力, 处于通常时机, 实际打出费用, 有效特征, 是类别, 决定先手, 自动宣告, 记录, 可支付来源, 候选目标, 取实体 } from './engine/engine.js';
+import { 可用启动式能力, 有效能力列表, 处于通常时机, 实际打出费用, 有效特征, 是类别, 决定先手, 自动宣告, 记录, 可支付来源, 候选目标, 取实体 } from './engine/engine.js';
 import { 有效控制器 } from './engine/continuous.js';
 import { 默认牌组, 缺牌替代 } from './data/decks.js';   // 初阵甲/初阵乙 只在 decks.ts 里当素材，服务端只用默认牌组
 import { 系列配置 } from './data/系列配置.js';
 import { 卡号, 卡图 } from './engine/types.js';
 import type {CardDef} from './engine/types.js';
 import { 需求_动作, 需求_决定, 合并同族动作, type 需求 } from './收发需求.js';
+import { AI挑动作, AI填需求 } from './engine/ai.js';
 
 /**
  * 按 系列配置 动态装载卡池。
@@ -84,6 +85,12 @@ interface 房间 {
   it: Generator<请求, void, Action | null>;
   当前: 请求 | null;
   AI代理: [boolean, boolean];
+  /** AI 每一步的延迟（毫秒；0 = 无延迟） */
+  AI速度: number;
+  /** AI 本回合已经启动过的能力（uid:能力索引:模式号 → 回合），防同一能力反复空转 */
+  AI本回合能力?: Map<string, number>;
+  /** 上面那张表记的是哪个回合（换回合清空） */
+  AI能力回合?: number;
   上次日志长?: number;
   本次日志?: string[];   // 这一步产生的日志行（等算完用时再写人读日志 ✓）   // 只把**新增**的对局日志打到服务端控制台 ✓
   /** 测试用：跳过 100.2a 的全部构筑限制（同名≤3、主牌 50 张以上） */
@@ -155,7 +162,7 @@ function 取房间(号?: string, 选项?: { 热座?: boolean }): 房间 {
     //   第一次广播**把这间热座房泄露给大厅** ✓ → 界面上"显示一会儿再消失" ✓（2026-10 报的 ✓）。
     热座: 选项?.热座 === true ? true : undefined,
     g: null!, it: null!, 当前: null,
-    AI代理: [false, false], 无限制组牌: false, 准备: [false, false], 入座: [null, null], 创建时间: Date.now(),
+    AI代理: [false, false], AI速度: 800, 无限制组牌: false, 准备: [false, false], 入座: [null, null], 创建时间: Date.now(),
     已开始: false, 废弃: false, 最后活动: Date.now(),
   };
   房间表.set(房.号, 房);
@@ -402,6 +409,7 @@ function 改房<T>(房: 房间, fn: () => T): T {
     return 结果;
   } finally {
     推送(房);
+  排AI(房);
   }
 }
 
@@ -664,7 +672,7 @@ function 视图(房: 房间, 座位: number | null = null) {
     人齐: 人齐了(房), 废弃: 房.废弃, 已开始: 房.已开始,
     准备: 房.准备, 都准备: 都准备好了(房), 等准备: !房.热座 && !都准备好了(房),
     热座: 座位 === null,
-    turn: 房.g.turn, active: 房.g.active, over: 房.g.over, winner: 房.g.winner, AI代理: 房.AI代理,
+    turn: 房.g.turn, active: 房.g.active, over: 房.g.over, winner: 房.g.winner, AI代理: 房.AI代理, AI速度: 房.AI速度,
     先手玩家: 房.g.先手玩家,
     // 103 开局：**只放开局独有的数据** —— 「进行到哪一步」「轮到谁」都在 当前请求 里，
     //   「谁先手」在下面的 先手玩家。开局做完时这里是 null（不是「阶段: 完成」）。
@@ -808,7 +816,92 @@ function 视图(房: 房间, 座位: number | null = null) {
 
 // 线格式动作 → 引擎 Action 的解析在 engine/解析动作.ts（那里能单元测试 ——
 //   ⚠ 不能放在这个文件里：server.ts 一被 import 就开 HTTP 服务器，导入即启动）。
+const AI定时 = new WeakMap<房间, ReturnType<typeof setTimeout>>();
+
+/** AI 的一步：读视图 → 挑动作/填需求 → 走和玩家一样的 应用() */
+/** 启动能力的身份键（同一张牌的同一个能力/模式算同一条） */
+function AI能力键(a: { uid?: number; 能力索引?: number; 模式号?: number }): string {
+  return String(a.uid) + ':' + String(a.能力索引) + ':' + String(a.模式号 ?? '');
+}
+
+/** 这条启动式的「豁免限制」是不是本回合已经生效了（再启动只会白付钱） */
+function AI重复豁免(g: GameState, seat: number, a: { uid?: number; 能力索引?: number }): boolean {
+  if (a.uid == null || a.能力索引 == null) return false;
+  const o = g.战场.find((x) => x.uid === a.uid) ?? g.放逐区.find((x) => x.uid === a.uid);
+  if (!o) return false;
+  const ab = 有效能力列表(g, o)[a.能力索引] as { 效应?: { 操作?: string; 禁止?: string; 来源?: { ref?: string } }[] } | undefined;
+  const 步 = ab?.效应?.find((x) => x?.操作 === '豁免限制');
+  if (!步) return false;
+  const 豁免 = g.players[seat]?.豁免 ?? [];
+  return 豁免.some((e) => e.禁止 === 步.禁止 && e.到期 >= g.turn
+    && (步.来源?.ref === '自身' ? e.来源 === o.uid : true));
+}
+
+function AI一步(房: 房间): void {
+  if (!房.当前 || 房.g.over) return;
+  const 决 = 房.当前.决定 as { 等双方确认?: boolean } | undefined;
+  let seat = 房.当前.玩家;
+  if (决?.等双方确认) {
+    const 已 = 双方确认.get(房) ?? [];
+    const 可 = [0, 1].filter((i) => 房.AI代理[i] && !已.includes(i));
+    if (!可.length) return;
+    seat = 可[0]!;
+  } else if (!房.AI代理[seat]) return;
+  const 视 = 视图(房, seat) as unknown as { 决定需求?: unknown; 合法动作?: { 种类: string; 需求?: unknown }[] };
+  let 体: 线动作 | null = null;
+  if (视.决定需求) 体 = AI填需求(视.决定需求 as never) as unknown as 线动作;
+  else {
+      const 回合 = 房.g.turn;
+      if (房.AI能力回合 !== 回合) { 房.AI本回合能力?.clear(); 房.AI能力回合 = 回合; }
+      const 已用 = (房.AI本回合能力 ??= new Map<string, number>());
+      const 合法 = (视.合法动作 ?? []) as { 种类: string; uid?: number; 能力索引?: number; 模式号?: number; 需求?: unknown }[];
+      const 可挑 = 合法.filter((x) => {
+        if (x.种类 !== '启动能力') return true;
+        if (已用.get(AI能力键(x)) === 回合) return false;          // 本回合启动过 → 不再空转
+        if (AI重复豁免(房.g, seat, x)) return false;               // 豁免已经生效 → 白付钱
+        return true;
+      });
+      const 动 = AI挑动作(可挑 as never);
+      if (!动) {
+        if (合法.some((x) => x.种类 === '让过')) 体 = { 种类: '让过' } as unknown as 线动作;
+        else return;
+      } else if (动.种类 === "让过") 体 = { 种类: "让过" } as unknown as 线动作;
+      else {
+        体 = AI填需求(动.需求 as never, 动 as never) as unknown as 线动作;
+        if (动.种类 === '启动能力') 已用.set(AI能力键(动 as never), 回合);
+      }
+  }
+  if (!体) return;
+  if (决?.等双方确认) (体 as { 确认座位?: number }).确认座位 = seat;
+  const r = 应用(房, 体, seat);
+  if (!r.ok) {
+    console.log("[AI] 选择被拒绝：" + (r.错误 ?? ""));
+    房.AI代理[seat] = false;
+    推送(房);
+  }
+}
+
+/** 按房间设置给当前请求排一次 AI（人一动作就取消；每步只排一个） */
+function 排AI(房: 房间): void {
+  const 旧 = AI定时.get(房); if (旧) { clearTimeout(旧); AI定时.delete(房); }
+  if (!房.当前 || 房.g.over) return;
+  const 决 = 房.当前.决定 as { 等双方确认?: boolean } | undefined;
+  let 有 = !!房.AI代理[房.当前.玩家];
+  if (决?.等双方确认) {
+    const 已 = 双方确认.get(房) ?? [];
+    有 = [0, 1].some((i) => 房.AI代理[i] && !已.includes(i));
+  }
+  if (!有) return;
+  const 延 = Math.max(0, 房.AI速度 ?? 800);
+  AI定时.set(房, setTimeout(() => {
+    AI定时.delete(房);
+    if (!房.当前) return;
+    try { AI一步(房); } catch (e) { console.log("[AI] 出错", e); }
+  }, 延));
+}
+
 export function 应用(房: 房间, 体: 线动作, 座位: number | null = null): { ok: boolean; 错误?: string } {   // 导出：给离线校验脚本用s' 做单元测试
+  { const t = AI定时.get(房); if (t) { clearTimeout(t); AI定时.delete(房); } }   // 人先动了 → 取消 AI
   if (!房.当前) return { ok: false, 错误: '现在不需要任何人做决定' };
   const p = 房.当前.玩家;
   // 联机时只能替自己的座位动作；热座（座位 null）不限制
@@ -831,9 +924,9 @@ export function 应用(房: 房间, 体: 线动作, 座位: number | null = null
   if (!r.ok) { 写记录({ 类: '收-拒绝', 错误: r.错误, 人读: '✗ ' + (r.错误 ?? '') }); 应用中 = 之前应用中; return { ok: false, 错误: r.错误 }; }
   /**
    * **依赖目标要配对**（050 螺旋突刺）—— 候选里能算出来不代表允许乱配：
-   *   第二目标必须真的是**第一目标的**相对或斜对单位；不配对就整次施放打回。
+   *   第二目标必须真的是**第一目标的**相对或斜对单位；不配对就整次打出打回。
    */
-  if (r.动作.种类 === '施放') {
+  if (r.动作.种类 === '打出') {
     const 规格 = r.动作.card.def.能力?.目标 ?? [];
     for (let i = 0; i < 规格.length; i++) {
       const sp = 规格[i]!;
@@ -865,11 +958,12 @@ export function 应用(房: 房间, 体: 线动作, 座位: number | null = null
       const 新 = [...new Set([...(双方确认.get(房) ?? []), 谁])];
       const 齐 = [...new Set(新)];
       双方确认.set(房, 齐);
-      if (齐.length < 2) { 推送(房); 应用中 = 之前应用中; return { ok: true }; }
+      if (齐.length < 2) { 推送(房); 排AI(房); 应用中 = 之前应用中; return { ok: true }; }
       双方确认.set(房, []);
       记录(房.g, 房.g.players.map((x) => x.name).join(' / ') + ' 都确认了展示');
       推进(房, r.动作);
       应用中 = 之前应用中;
+  排AI(房);
       return { ok: true };
     }
     if (双方确认.get(房)?.length) 双方确认.set(房, []);
@@ -1131,9 +1225,15 @@ const 服务器 = http.createServer((req, res) => {
     if (!房) return 发JSON(res, { ok: false, 错误: '还没入座（没有令牌或令牌已失效）' }, 400);
     if (体.动作 === '设置') {
       if (Array.isArray(体.代理)) {
-        房.AI代理 = [!!体.代理[0], !!体.代理[1]];
+        const 新: [boolean, boolean] = [!!体.代理[0], !!体.代理[1]];
+        // 联机只能开关**自己的**托管；热座（座位 = -1）两边都能开
+        if (座 && 座.座位 >= 0) 新[1 - 座.座位] = !!房.AI代理[1 - 座.座位];
+        房.AI代理 = 新;
       }
-      改房(房, () => { });      // 托管开关变了，对面也该看到
+      if (typeof 体.速度 === 'number' && Number.isFinite(体.速度)) {
+        房.AI速度 = Math.max(0, Math.min(10000, Math.round(体.速度)));
+      }
+      改房(房, () => { });      // 托管开关 / 速度变了，对面也该看到
       return 发JSON(res, { ok: true, 状态: 视图(房, 视图座位(座)) });
     }
     return 发JSON(res, { ok: true, 状态: 视图(房, 视图座位(座)) });
