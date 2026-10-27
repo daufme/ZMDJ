@@ -13,17 +13,17 @@
  */
 import type { GameState } from './state.js';
 import { 相对阵地 } from './state.js';
-import type { 阵地, 筛选, 费用行为 } from './types.js';
+import type { 阵地, 筛选, 费用步 } from './types.js';
 import { 阵地顺序 } from './types.js';
 import { 解析能力, 有效控制器, 符合筛选 } from './continuous.js';
 import type { ActivatedAbility } from './types.js';
 import {
-  有效能力列表,
-  能打出领土, 能打出, 候选目标, 能转移, 能移动许可, 转移关键词目标, 许可目标, 转移目标, 可支付数字费用,能发起战斗, 合法攻击对象, 可用启动式能力, 处于通常时机,
+  启动费用修正, 有效能力列表,
+  能打出领土, 能打出, 候选目标, 能转移, 能移动许可, 转移关键词目标, 许可目标, 转移目标, 可支付数字费用,能发起战斗, 可宣告攻击, 合法攻击对象, 可用启动式能力, 处于通常时机,
   type 时机选项,
   可支付上限, 实际打出费用, 有词, 能填满所有槽, 展开依赖规格, type 候选 as 引擎候选,
 } from './engine.js';
-import { 费用点数值, 费用点数形状, 牌面费用值, 取费用行为, 支付费用 } from './费用.js';
+import { 费用点数值, 费用点数形状, 牌面费用值, 取费用步, 支付费用 } from './费用.js';
 
 export interface 候选 {
   /**
@@ -32,15 +32,17 @@ export interface 候选 {
    *   既不撞实体的正 uid，也不撞玩家的 0/1。中间层原样传递，只在「列候选」和「收目标」两处转换。
    */
   类型: '实体' | '玩家' | '堆叠项';
-  uid?: number; 玩家?: number; 名称: string; 敌?: boolean;
+  iid?: number; 玩家?: number; 名称: string; 敌?: boolean;
 }
 
 export interface 合法动作 {
-  种类: '打领土' | '打出' | '启动能力' | '发起战斗' | '让过' | '转移';
-  uid?: number;
+  种类: '打领土' | '打出' | '启动能力' | '特殊动作' | '发起战斗' | '让过' | '转移';
+  iid?: number;
   能力索引?: number;
   /** 700.2b：启动式能力的模式是**作为进入堆叠的一部分**选的 —— 一个模式一条动作，界面不用再问 */
-  模式号?: number;
+  模式号?: number | number[];
+  模式候选?: { 索引: number; 标签?: string }[];
+  模式数量?: { 最小: number; 最大: number };
   标签: string;
   /** 打领土时打明置还是暗置（304.4a / 304.4b）—— **每条动作自己带着**，界面不用再问 */
   面?: '明置' | '暗置';
@@ -62,12 +64,12 @@ export interface 合法动作 {
   /** 601.2f：这张牌的**额外费用**要牺牲一个单位 —— 界面拿它开槽，客户端把选中的 uid 放回 额外牺牲 */
   /** 601.2f：这个额外费用要牺牲几个（109 现在是 1） */
   额外牺牲数?: number;
-  额外牺牲候选?: { uid: number; 名称: string }[];
+  额外牺牲候选?: { iid: number; 名称: string }[];
   /**
    * **601.2f 打出的额外费用（通用）**：每种要玩家挑的费用各一项（弃牌 / 牺牲 / 横置其他）。
    * 支付 / 体力 / 自身体力 不需要挑，不在这里（体力不够时这张牌根本不会列出来）。
    */
-  额外需求?: { 操作: string; 数量: number; 候选: { uid: number; 名称: string }[] }[];
+  额外需求?: { 操作: string; 数量: number; 候选: { iid: number; 名称: string }[] }[];
  /** 108.3a：这个**启动式能力**的费用带 {X} —— 界面先问宣告多少，再按 X 开费用槽 */
  费用X?: boolean;
  费用步进?: { 偏移: number; 步进: number };   // X 费的可选点数形状（{X}{X} → 步进 2）
@@ -79,7 +81,7 @@ export interface 合法动作 {
    * **602.1d 启动费用的需求**：每种要玩家挑的费用一项（弃牌 / 牺牲 / 横置其他）。
    * `数量: 'X'` = 张数等于宣告的 X（108.3a，孙权「弃 X 张」）；支付走支付源槽，不在这里。
    */
-  费用需求?: { 操作: string; 数量: number | 'X'; 候选: { uid: number; 名称: string }[] }[];
+  费用需求?: { 操作: string; 数量: number | 'X'; 候选: { iid: number; 名称: string }[] }[];
   攻击对象?: { 标签: string; 种类: '玩家' | '阵地'; 玩家: number; 阵地?: 阵地 }[];
 }
 
@@ -94,6 +96,25 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
   // 108.9 通常时机
   const 通常时机 = opts.允许通常时机 && 处于通常时机(g, p);
 
+  // 116.2c：静止式能力授予的**特殊动作**。不使用堆叠，有优先权即可执行。
+  for (const o of g.战场) {
+    const abs = 有效能力列表(g, o) as unknown as { 种类?: string; 可执行者?: string; 费用?: { 操作?: string; 点数?: unknown }[]; 标签?: string }[];
+    for (let i = 0; i < abs.length; i++) {
+      const ab = abs[i]!;
+      if (ab.种类 !== '特殊动作') continue;
+      if (ab.可执行者 !== '任意' && o.操控者 !== p) continue;
+      let 费 = 0;
+      let 合法 = true;
+      for (const f of ab.费用 ?? []) {
+        if (f.操作 !== '支付') { 合法 = false; break; }
+        费 += 费用点数值(f.点数 as never);
+      }
+      if (!合法) continue;
+      out.push({ 种类: '特殊动作', iid: o.iid, 能力索引: i,
+        标签: (ab.标签 ?? '执行特殊动作') + '（不进入堆叠）', 费用数: 费 });
+    }
+  }
+
   // 304.1：打出领土要「通常时机」，而通常时机要求堆叠为空（117.1b/117.1c）。
   // 所以【魏新兵】还在堆叠里时不能打领土，必须等它结算完。
   if (opts.允许打领土 && g.stack.length === 0) {
@@ -103,11 +124,11 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       //   于是领土牌要两步（打出领土 → 选明置/暗置），而非领土牌（走下面那支 + 打出）是一步列完的。
       //   同一件事两种交互，已经统一：**能打几条就给几条**，界面只管列出来。
       if (能打出领土(g, p, o, '明置')) {
-        out.push({ 种类: '打领土', uid: o.uid, 面: '明置', 标签: '打出领土 ' + o.def.全名 });
+        out.push({ 种类: '打领土', iid: o.iid, 面: '明置', 标签: '打出领土 ' + o.def.全名 });
       }
       // 304.4b：不是领土牌也能暗置打出，成为一个暗置领土
       if (能打出领土(g, p, o, '暗置')) {
-        out.push({ 种类: '打领土', uid: o.uid, 面: '暗置', 标签: '暗置打出 ' + o.def.全名 + '（作为暗置领土）' });
+        out.push({ 种类: '打领土', iid: o.iid, 面: '暗置', 标签: '暗置打出 ' + o.def.全名 + '（作为暗置领土）' });
       }
     }
   }
@@ -123,12 +144,12 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       if (有效控制器(g, u) !== p) continue;
       if (能转移(g, p, u)) {
         for (const 到 of 转移关键词目标(g, u)) {
-          out.push({ 种类: '转移', uid: u.uid, 到, 路径: '转移', 标签: '转移 ' + u.def.全名 + ' → ' + 到 });
+          out.push({ 种类: '转移', iid: u.iid, 到, 路径: '转移', 标签: '转移 ' + u.def.全名 + ' → ' + 到 });
         }
       }
       if (能移动许可(g, p, u)) {
         for (const 到 of 许可目标(g, u)) {
-          out.push({ 种类: '转移', uid: u.uid, 到, 路径: '许可', 标签: '移动 ' + u.def.全名 + ' → ' + 到 });
+          out.push({ 种类: '转移', iid: u.iid, 到, 路径: '许可', 标签: '移动 ' + u.def.全名 + ' → ' + 到 });
         }
       }
     }
@@ -136,12 +157,12 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
 
   // 手牌 + 本回合被授权「可从放逐区打出」的牌（045 诸葛亮）
   const 可打出牌 = [...me.hand, ...g.放逐区.filter((o) =>
-    (g.本回合可打出 ?? []).some((x) => x.uid === o.uid && x.回合 === g.turn))];
+    (g.本回合可打出 ?? []).some((x) => x.iid === o.iid && x.回合 === g.turn))];
   for (const o of 可打出牌) {
     if (o.def.类别.includes('领土')) continue;
     if (!能打出(g, p, o).ok) continue;
     // 601.2f：额外费用列表（这里先取出来，下面既用于「付不付得起」也用于开槽）
-  const 额外费们 = (o.def.额外费用 ?? []) as 费用行为[];
+  const 额外费们 = (o.def.额外费用 ?? []) as 费用步[];
   const 额外支付 = 额外费们.reduce((n, f) => n + (f.操作 === '支付' ? 费用点数值(f.点数, 0) : 0), 0);
   // 108.3a：费用带 X 的牌，X 由操控者打出时宣告（最小 0），所以按 0 判它能不能打
     const 是X = 牌面费用值(o.def.打出费用) === 'X';
@@ -151,18 +172,41 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       return typeof v === 'number' ? v : 0;   // 108.3g：带 X 的牌在堆叠外 X 视同 0
     };
     // 604：**实际费用**（含费用修正，例如【李典】的加价）—— 客户端照它决定要挑几块地
-    if (!可支付数字费用(g, p, (是X ? 0 : 实际打出费用(g, p, o.def)) + 额外支付)) continue;
+    if (!可支付数字费用(g, p, (是X ? 0 : 实际打出费用(g, p, o)) + 额外支付)) continue;
     const 目标规格: { 目标名: string; 数量: { 最小: number; 最大: number }; 候选: 候选[];
       依赖?: string; 按锚?: Record<string, (number | string)[]>;
       /** 本槽候选的该属性必须等于本牌宣告的 X（095）；候选项带 `需X`，客户端按已选 X 过滤 */
       按X?: string }[] = [];
+    const 模式 = o.def.能力?.模式;
+    const 模式候选: { 索引: number; 标签?: string }[] = [];
+    const 模式数量 = 模式 ? (typeof 模式.选几项 === 'number' ? { 最小: 模式.选几项, 最大: 模式.选几项 } : 模式.选几项) : undefined;
+    if (模式) {
+      for (let i = 0; i < 模式.选项.length; i++) {
+        const 项 = 模式.选项[i]!;
+        const specs = 项.目标 ?? [];
+        if (!specs.every((sp) => 候选目标(g, p, sp, o).length >= sp.数量.最小)) continue;
+        模式候选.push({ 索引: i, ...(项.标签 ? { 标签: 项.标签 } : {}) });
+        for (const sp of specs) {
+          const c = 候选目标(g, p, sp, o);
+          目标规格.push({
+            目标名: i + ':' + sp.目标名,
+            数量: sp.数量,
+            候选: c.map((x) => x.obj
+              ? { 类型: '实体' as const, iid: x.obj.iid, 名称: x.obj.def.全名 }
+              : { 类型: '玩家' as const, 玩家: x.玩家!, 名称: g.players[x.玩家!]!.name }),
+            ...(sp.标签 ? { 标签: sp.标签 } : {}),
+          });
+        }
+      }
+      if (!模式候选.length) continue;
+    }
     let 可行 = true;
     // ⚠ **一起看**：各槽能不能同时填满（一个物件只能进一个槽）。各查各的会让
     //   129 貂蝉那种「两个槽条件一样」在只有一个合法物件时被误判成可行。
     if (!能填满所有槽(g, p, o.def.能力?.目标 ?? [])) 可行 = false;
     // 依赖槽（050）：候选 = 以每个第一目标为锚的并集；按锚 让客户端只让点配对的那几个
     const 展开 = 展开依赖规格(g, p, o.def.能力?.目标 ?? [], o);
-    const 转键 = (x: 引擎候选): number | string => x.obj ? x.obj.uid : x.堆叠项 !== undefined ? -x.堆叠项 : '玩家' + x.玩家;
+    const 转键 = (x: 引擎候选): number | string => x.obj ? x.obj.iid : x.堆叠项 !== undefined ? -x.堆叠项 : '玩家' + x.玩家;
     for (const it of 展开) {
       const spec = it.sp;
       const c = it.候选;
@@ -170,9 +214,9 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       目标规格.push({
         目标名: spec.目标名, 数量: spec.数量,
         候选: c.map((x) => x.obj
-          ? { 类型: '实体' as const, uid: x.obj.uid, 名称: x.obj.def.全名,
+          ? { 类型: '实体' as const, iid: x.obj.iid, 名称: x.obj.def.全名,
               ...(spec.依赖X ? { 需X: X数(x.obj) } : {}) }
-        : x.堆叠项 !== undefined ? { 类型: '堆叠项' as const, uid: -x.堆叠项, 名称: '（能力）' }
+        : x.堆叠项 !== undefined ? { 类型: '堆叠项' as const, iid: -x.堆叠项, 名称: '（能力）' }
           : { 类型: '玩家' as const, 玩家: x.玩家!, 名称: g.players[x.玩家!]!.name }),
         ...(spec.标签 ? { 标签: spec.标签 } : {}),
   ...(spec.依赖 ? { 依赖: spec.依赖 } : {}),
@@ -216,35 +260,35 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
     }
     // 601.2f：打出的额外费用是**通用行为列表** —— 要玩家挑的那些先把候选算出来；
     //   挑不够 / 体力不够 → 这张牌不列出来（付不出就不能打，601.2c）
-    const 额外需求: { 操作: string; 数量: number; 候选: { uid: number; 名称: string }[] }[] = [];
+    const 额外需求: { 操作: string; 数量: number; 候选: { iid: number; 名称: string }[] }[] = [];
     let 额外可行 = true;
     for (const f of 额外费们) {
       if (f.操作 === '支付') continue;
-      if (f.操作 === '体力') { if (me.体力 < f.点数) { 额外可行 = false; break; } continue; }
-      if (f.操作 === '自身体力') continue;
+      if (f.操作 === '失去体力' || f.操作 === '设面' || f.操作 === '移动') continue;
       const 数量 = (f as { 数量?: { 最小: number; 最大: number } }).数量?.最小 ?? 1;
       const 筛选c = (f as { 筛选?: 筛选 }).筛选;
-      let 候选2: { uid: number; 名称: string }[] = [];
+      let 候选2: { iid: number; 名称: string }[] = [];
       if (f.操作 === '弃牌') {
-        候选2 = me.hand.filter((c) => c !== o && (!筛选c || 符合筛选(g, c, 筛选c))).map((c) => ({ uid: c.uid, 名称: c.def.全名 }));
+        候选2 = me.hand.filter((c) => c !== o && (!筛选c || 符合筛选(g, c, 筛选c))).map((c) => ({ iid: c.iid, 名称: c.def.全名 }));
       } else if (f.操作 === '牺牲') {
-        候选2 = g.战场.filter((x) => 有效控制器(g, x) === p && (!筛选c || 符合筛选(g, x, 筛选c))).map((x) => ({ uid: x.uid, 名称: x.def.全名 }));
+        候选2 = g.战场.filter((x) => 有效控制器(g, x) === p && (!筛选c || 符合筛选(g, x, 筛选c))).map((x) => ({ iid: x.iid, 名称: x.def.全名 }));
       } else if (f.操作 === '放逐') {
         const 池 = (f as { 从?: string }).从 === '手牌' ? me.hand : me.graveyard;
-        候选2 = 池.filter((c) => c !== o && (!筛选c || 符合筛选(g, c, 筛选c))).map((c) => ({ uid: c.uid, 名称: c.def.全名 }));
-      } else if (f.操作 === '横置' && f.目标 === '其他') {
-        候选2 = g.战场.filter((x) => x !== o && 有效控制器(g, x) === p && !x.tapped && (!筛选c || 符合筛选(g, x, 筛选c))).map((x) => ({ uid: x.uid, 名称: x.def.全名 }));
+        候选2 = 池.filter((c) => c !== o && (!筛选c || 符合筛选(g, c, 筛选c))).map((c) => ({ iid: c.iid, 名称: c.def.全名 }));
+      } else if (f.操作 === '横置' && (f as { 数量?: unknown }).数量 !== undefined) {
+        候选2 = g.战场.filter((x) => x !== o && 有效控制器(g, x) === p && !x.tapped && (!筛选c || 符合筛选(g, x, 筛选c))).map((x) => ({ iid: x.iid, 名称: x.def.全名 }));
       } else { 额外可行 = false; break; }     // 引擎还不认识的费用种类：宁可不列
       if (候选2.length < 数量) { 额外可行 = false; break; }
       额外需求.push({ 操作: f.操作, 数量, 候选: 候选2 });
     }
     if (!额外可行) continue;
     // 旧字段（109 舍生取义）继续给：取「牺牲」那一条
-    const 额外牺牲费 = 取费用行为(o.def.额外费用, '牺牲');
+    const 额外牺牲费 = 取费用步(o.def.额外费用, '牺牲');
     out.push({
-      种类: '打出', uid: o.uid,
-       标签: '打出 ' + o.def.全名 + '（费用 ' + (是X ? 'X' : 实际打出费用(g, p, o.def)) + '）',
+      种类: '打出', iid: o.iid,
+       标签: '打出 ' + o.def.全名 + '（费用 ' + (是X ? 'X' : 实际打出费用(g, p, o)) + '）',
       目标规格: 目标规格.length ? 目标规格 : undefined,
+      ...(模式 ? { 模式候选, 模式数量 } : {}),
       需要阵地: 阵地表,
       // 108.3a：费用带 {X} 的牌，界面要问玩家宣告多少（上限 = 现在付得起的）
         是X,                                          // 界面据此决定是否强制手动挑地
@@ -253,12 +297,12 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
         // 601.2f：打出的**额外费用**（109 舍生取义「牺牲一个由你操控的单位」）——
         //   付不出就不列这张牌；付得出就把候选交给界面（和启动费用的弃牌/牺牲同一套）
     额外需求: 额外需求.length ? 额外需求 : undefined,
-    额外牺牲数: 额外牺牲费?.数量.最小,
+    额外牺牲数: 额外牺牲费?.数量?.最小 ?? 0,
         额外牺牲候选: 额外牺牲费
           ? 候选目标(g, p, { 目标名: '_', 数量: { 最小: 1, 最大: 9 }, 选择: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '操控者', 值: '你' }, ...(额外牺牲费.筛选 ?? [])] } }, null)
-              .map((c) => ({ uid: c.obj!.uid, 名称: c.obj!.def.全名 }))
+              .map((c) => ({ iid: c.obj!.iid, 名称: c.obj!.def.全名 }))
           : undefined,
-       费用数: 是X ? 0 : 实际打出费用(g, p, o.def),
+       费用数: 是X ? 0 : 实际打出费用(g, p, o),
     });
   }
 
@@ -286,53 +330,55 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
         if (!能填满所有槽(g, p, 项.目标, o)) continue;
         // 602.1d 的启动费用（弃牌 / 牺牲）：**付不出的能力不列出来**
         // 数量 宣告X 时最小是 0（X 由启动的玩家宣告），所以不在这里卡手牌数
-        const 弃牌费 = 取费用行为(ab?.费用, '弃牌');
+        const 弃牌费 = 取费用步(ab?.费用, '弃牌');
         if (弃牌费 && !弃牌费.宣告X && g.players[p]!.hand.length < 弃牌费.数量.最小) continue;
-        const 牺牲费 = 取费用行为(ab?.费用, '牺牲');
-        const 可牺牲 = 牺牲费
+        const 牺牲费 = 取费用步(ab?.费用, '牺牲');
+        // 目标写死为自身的牺牲（祖茂 / 边塞长城）由引擎自动支付，不问玩家。
+        const 牺牲自身 = !!(牺牲费 && typeof 牺牲费.目标 === 'object' && 牺牲费.目标 !== null
+          && 'ref' in 牺牲费.目标 && (牺牲费.目标 as { ref?: string }).ref === '自身');
+        const 可牺牲 = 牺牲费 && !牺牲自身
           ? 候选目标(g, p, { 目标名: '_', 数量: { 最小: 1, 最大: 99 },
               选择: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '操控者', 值: '你' }, ...(牺牲费.筛选 ?? [])] } }, o)
               .map((x) => x.obj).filter((x): x is NonNullable<typeof x> => !!x)
           : [];
-  if (牺牲费 && 可牺牲.length < 牺牲费.数量.最小) continue;
+  if (牺牲费 && !牺牲自身 && 可牺牲.length < (牺牲费.数量?.最小 ?? 1)) continue;
   // 602.1d：横置**其他**东西作为费用（026 那种；启动式同样支持）
-  const 横置费 = 取费用行为(ab?.费用, '横置') as
-    | { 操作: '横置'; 目标: '自身' }
-    | { 操作: '横置'; 目标: '其他'; 数量: { 最小: number; 最大: number }; 筛选?: 筛选 }
+  const 横置费 = 取费用步(ab?.费用, '横置') as
+    | { 操作: '横置'; 目标: import('./types.js').RecipientRef; 数量?: { 最小: number; 最大: number }; 筛选?: 筛选 }
     | undefined;
-  const 可横置 = 横置费 && 横置费.目标 === '其他'
-    ? g.战场.filter((x) => x !== o && 有效控制器(g, x) === p && !x.tapped && (!横置费.筛选 || 符合筛选(g, x, 横置费.筛选)))
-      .map((x) => ({ uid: x.uid, 名称: x.def.全名 }))
+  const 可横置 = !!横置费 && (横置费 as { 数量?: unknown }).数量 !== undefined
+    ? g.战场.filter((x) => x !== o && 有效控制器(g, x) === p && !x.tapped && (!(横置费 as { 筛选?: 筛选 }).筛选 || 符合筛选(g, x, 横置费.筛选)))
+      .map((x) => ({ iid: x.iid, 名称: x.def.全名 }))
     : [];
-  if (横置费 && 横置费.目标 === '其他' && 可横置.length < (横置费.数量?.最小 ?? 1)) continue;
+  if (横置费 && 横置费.数量 && 可横置.length < (横置费.数量.最小 ?? 1)) continue;
   /**
    * **启动费用的需求列表**（602.1d）—— 和「打出的额外费用」同一套写法：
    * 每种要玩家挑的费用一项；`数量: 'X'` = 张数等于宣告的 X（108.3a，孙权「弃 X 张」）。
    * 支付走「支付源」槽（X 费也在那里挑地），所以这里不列 `支付`。
    */
-  const 费用需求: { 操作: string; 数量: number | 'X'; 候选: { uid: number; 名称: string }[] }[] = [];
+  const 费用需求: { 操作: string; 数量: number | 'X'; 候选: { iid: number; 名称: string }[] }[] = [];
   if (弃牌费) 费用需求.push({ 操作: '弃牌', 数量: 弃牌费.宣告X ? 'X' : 弃牌费.数量.最小,
-    候选: g.players[p]!.hand.map((c) => ({ uid: c.uid, 名称: c.def.全名 })) });
-  if (牺牲费) 费用需求.push({ 操作: '牺牲', 数量: 牺牲费.数量.最小,
-    候选: 可牺牲.map((x) => ({ uid: x.uid, 名称: x.def.全名 })) });
-  if (横置费 && 横置费.目标 === '其他') 费用需求.push({ 操作: '横置', 数量: 横置费.数量?.最小 ?? 1, 候选: 可横置 });
+    候选: g.players[p]!.hand.map((c) => ({ iid: c.iid, 名称: c.def.全名 })) });
+  if (牺牲费 && !牺牲自身) 费用需求.push({ 操作: '牺牲', 数量: 牺牲费.数量?.最小 ?? 1,
+    候选: 可牺牲.map((x) => ({ iid: x.iid, 名称: x.def.全名 })) });
+  if (横置费 && (横置费 as { 数量?: unknown }).数量 !== undefined) 费用需求.push({ 操作: '横置', 数量: 横置费.数量?.最小 ?? 1, 候选: 可横置 });
         for (const spec of 项.目标) {
           const c = 候选目标(g, p, spec, o);
           if (c.length < spec.数量.最小) continue;
           规格.push({ 目标名: spec.目标名, 数量: spec.数量,
-            候选: c.map((x) => (x.obj ? { 类型: '实体' as const, uid: x.obj.uid, 名称: x.obj.def.全名, 敌: x.obj.操控者 !== p }
-            : x.堆叠项 !== undefined ? { 类型: '堆叠项' as const, uid: -x.堆叠项, 名称: '（能力）', 敌: false }
+            候选: c.map((x) => (x.obj ? { 类型: '实体' as const, iid: x.obj.iid, 名称: x.obj.def.全名, 敌: x.obj.操控者 !== p }
+            : x.堆叠项 !== undefined ? { 类型: '堆叠项' as const, iid: -x.堆叠项, 名称: '（能力）', 敌: false }
                                     : { 类型: '玩家' as const, 玩家: x.玩家!, 名称: g.players[x.玩家!]!.name })) });
         }
         const 支付 = 支付费用(ab?.费用);
-        out.push({ 种类: '启动能力', uid: o.uid, 能力索引: i, 模式号: 项.模式号,
+        out.push({ 种类: '启动能力', iid: o.iid, 能力索引: i, 模式号: 项.模式号,
           目标规格: 规格.length ? 规格 : undefined,
           // 数字费用（605）：界面拿它决定要不要先让玩家挑地付钱（现在**没有自动支付**了）
-          费用数: 支付.宣告X ? 0 : 支付.点数,
+          费用数: 支付.宣告X ? 0 : Math.max(0, 支付.点数 + 启动费用修正(g, p, o)),
           // 108.3a：费用带 {X} 的**启动式能力** —— 界面先选要付几点（挑几块地就是几）
           费用X: 支付.宣告X ? true : undefined,
           // ★ 步进：X 费的"可选点数"必须落在 偏移 + n×步进（周瑜 {X}{X} → 步进 2，只能付 2/4/6）
-          费用步进: 支付.宣告X ? 费用点数形状(取费用行为(ab?.费用, '支付')?.点数) : undefined,
+          费用步进: 支付.宣告X ? 费用点数形状(取费用步(ab?.费用, '支付')?.点数) : undefined,
           // 启动费用的需求（602.1d）—— 和打出的额外费用同一套：每种要挑的费用一项
           费用需求: 费用需求.length ? 费用需求 : undefined,
           标签: '启动 ' + o.def.全名 + (项.标签 ? '：' + 项.标签 : '')
@@ -341,13 +387,8 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
     }
   }
   for (const u of 通常时机 ? g.战场.filter((x) => 有效控制器(g, x) === p) : []) {
-    if (!能发起战斗(g, p, u)) continue;
-    out.push({
-      种类: '发起战斗', uid: u.uid, 标签: '令 ' + u.def.全名 + ' 发起战斗',
-      攻击对象: 合法攻击对象(g, p, u).map((t) => t.种类 === '玩家'
-        ? { 标签: '攻击 ' + g.players[t.玩家]!.name, 种类: '玩家' as const, 玩家: t.玩家 }
-        : { 标签: '攻击 ' + t.阵地, 种类: '阵地' as const, 玩家: t.玩家, 阵地: t.阵地 }),
-    });
+    if (!可宣告攻击(g, p, u)) continue;
+    out.push({ 种类: '发起战斗', iid: u.iid, 标签: '令 ' + u.def.全名 + ' 发起战斗' });
   }
 
   out.push({ 种类: '让过', 标签: '让过' });

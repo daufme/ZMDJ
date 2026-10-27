@@ -16,11 +16,11 @@
  * 同一层内按时间印记先后生效（613.7）；层2-6 中特征定义能力先行（613.3）。
  *
  * 已简化的部分（都在下面单独标注）：
- *   - 层1a 复制（708）未实现
+ *   - 层1a 复制（708）由 copy.ts 的 def 快照实现，不在这里重复套一层
  *   - 层2 操控权改变与层3 描述改变目前没有效应会产生，但层位已留好
  *   - 613.8 从属系统未实现，同层一律按时间印记
  */
-import type { CardType, Faction, Supertype, 筛选, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 历史条件, 筛选比较, Value } from './types.js';
+import type { CardType, Faction, Supertype, 筛选, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 历史查询, 筛选比较, Value, Condition, TriggeredAbility, 玩家连续效应 } from './types.js';
 import { 牌面费用值 } from './费用.js';
 import type { GameState, Obj, StackItem } from './state.js';
 import { 相对阵地, 相邻阵地, 斜对阵地, 加事件记录, 写事件记录, 盖章 } from './state.js';
@@ -40,12 +40,23 @@ function 层值(v: unknown, 来源: Obj | null, g?: GameState): number {
   if (!v || typeof v !== 'object') return 0;
   const o = v as Record<string, unknown>;
   if ('记忆' in o) return Number(来源?.记忆[String(o['记忆'])] ?? 0);
-  if ('数' in o && g) return 符合选择器的物件数(g, 来源, o['数'] as Selector);
-  if ('本回合失去体力' in o) {
+  if ('数' in o && g) {
+    const st = o as { 数: Selector; 操作?: string; 取?: 筛选属性 };
+    if ((st.操作 === undefined || st.操作 === '数量') && !st.取) return 符合选择器的物件数(g, 来源, st.数);
+    return 层统计值(g, 来源, st);
+  }
+  if ('历史' in o) {
     if (!g) return 0;
-    const 号 = o['本回合失去体力'] === '你' ? (来源?.操控者 ?? 0) : Number(o['本回合失去体力']);
-    return g.事件记录.filter((ev) => ev.事件 === '失去体力' && ev.回合 === g.turn && ev.受方 === 号)
-      .reduce((n, ev) => n + Number(ev.数量 ?? 0), 0);
+    const 条 = o['历史'] as { 事件: string; 时段?: string; 谁的?: string; 操作?: string; 取?: string };
+    const 事件们 = g.事件记录.filter((ev) =>
+      ev.事件 === 条.事件
+      && (条.时段 !== '本回合' || ev.回合 === g.turn)
+      && (条.时段 !== '上回合' || ev.回合 === g.turn - 1)
+      && (条.时段 !== '本步骤' || (ev.回合 === g.turn && ev.步骤 === g.当前步骤))
+      && (条.谁的 === undefined || ev.受方 === (来源?.操控者 ?? 0)));
+    if ((条.操作 ?? '数量') === '数量') return 事件们.length;
+    if (条.操作 === '合计' || 条.取 === '事件量') return 事件们.reduce((n, ev) => n + Number(ev.数量 ?? 0), 0);
+    return 0;
   }
   // 「乘以系数」（107 黄盖「每已损失 1 点体力，便 +2 武力」= 伤害标记数 × 2）
   if ('乘以' in o) return 层值(o['乘以'], 来源, g) * Number(o['系数'] ?? 0);
@@ -64,6 +75,22 @@ function 层值(v: unknown, 来源: Obj | null, g?: GameState): number {
 }
 
 /** 「符合这个选择器的物件有几个」—— 枚举各区域，交给 符合选择器 */
+/** 层内的数统计（不同值/合计/最大/最小；用印制属性，避免递归） */
+function 层统计值(g: GameState, 来源: Obj | null, st: { 数: Selector; 操作?: string; 取?: 筛选属性 }): number {
+  const 池: Obj[] = [...g.战场];
+  for (const p of g.players) 池.push(...p.hand, ...p.graveyard, ...p.library);
+  池.push(...g.放逐区);
+  const 候 = 池.filter((x) => 符合选择器(g, x, st.数, 来源, 来源?.操控者 ?? 0, undefined as never));
+  const 值们: (string | number)[] = [];
+  for (const o of 候) if (st.取) 值们.push(...取印制值(o, st.取));
+  if ((st.操作 ?? '数量') === '数量') return 值们.length;
+  if (st.操作 === '不同值') return new Set(值们.filter((x) => x !== null && x !== undefined).map(String)).size;
+  const 数们 = 值们.filter((x): x is number => typeof x === 'number');
+  if (st.操作 === '合计') return 数们.reduce((a, b) => a + b, 0);
+  if (st.操作 === '最大') return 数们.length ? Math.max(...数们) : 0;
+  return 数们.length ? Math.min(...数们) : 0;
+}
+
 function 符合选择器的物件数(g: GameState, 来源: Obj | null, sel: Selector): number {
   const 池: Obj[] = [...g.战场];
   for (const p of g.players) 池.push(...p.hand, ...p.graveyard, ...p.library);
@@ -102,19 +129,34 @@ export interface 特征 {
   授予动作: { 动作: string; 参数?: Record<string, string | number | boolean> }[];
 }
 
+/** 613.10：玩家的特征 —— 目前只有关键词（702.1c）。 */
+export interface 玩家特征 {
+  关键词: 关键词能力条目[];
+}
+
+/** 613.10：从战场静止式能力收集到的“玩家持续效应”。 */
+interface 玩家候选 {
+  时间印记: number;
+  来源: Obj | null;
+  控制器: number;
+  适用: 玩家连续效应['适用'];
+  关键词?: 关键词能力条目[];
+  条件?: Condition;
+}
+
 interface 候选效应 {
   时间印记: number;
   /** 明确指向某个实体（标记 / 指向性持续效应） */
   /** 明确指向某个实体 —— **内部候选**直接放物件本身（关键词授予、+1/+1 标记那几条路） */
   指定?: Obj;
   /**
-   * 从 `g.连续效应` **派生**出来的那一条：这里存**uid**，不是实体。
+   * 从 `g.连续效应` **派生**出来的那一条：这里存**实例 iid**，不是实体。
    * ⚠ 为什么不能用 `指定`：实体一旦离场，`找实体` 就返回 undefined，
    *   匹配处 `if (c.指定)` 随之不成立 → 效应**退回按「范围」匹配** → 漫延到范围里的
    *   其他物件（降服所附着的单位一死，对方其他阵地上的单位全变成你的操控）。
-   *   存 uid 就能表达「指的是谁，但它已经不在了」→ **谁都不匹配**。
+   *   存实例 iid 就能表达「指的是谁，但它已经不在了」→ **谁都不匹配**。
    */
-  指定uid?: number;
+  指定实例?: number;
   /** 611.2c：影响特征的效应在其开始时锁定的物件组 */
   受锁定?: number[];
   来源: Obj | null;
@@ -165,31 +207,24 @@ function 基础特征(o: Obj): 特征 {
 }
 
 /** 收集全场所有静止式能力产生的持续性效应 + 已产生的连续性效应 + 标记 */
-function 收集候选(g: GameState): 候选效应[] {
+function 收集候选(g: GameState, 玩家候选表?: 玩家候选[]): 候选效应[] {
   const out: 候选效应[] = [];
   // 战场是一个**共享区域** —— 直接遍历，不按玩家分
   for (const o of g.战场) {
     {
       // 709.2a：暗置的实体没有规则叙述，因此不产生任何持续性效应
       if (o.面 === '暗置') continue;
-      const abs = (o.def.能力?.能力 ?? []) as {
-        种类?: string;
-        连续?: { 范围?: Selector; 筛选?: 筛选; 层: 层修改; 条件?: unknown };
-        自身加成?: { 每个其他同名: { 武力?: number; 体力上限?: number } };
-      }[];
-      // 702.28b 同袍：「对此单位和与其**相邻**且与其具**共通副类别**的每个单位而言，
-      //   只要它们之一具有某个**非同袍的印制关键词能力**，则他们皆具有该关键词能力。」
-      // ⚠ 这里**直接读 def.能力**，不能调 有词（那会回到 计算特征 → 死循环）
+      const abs = (o.def.能力?.能力 ?? []) as StaticAbility[];
+      // 702.28b 同袍
       if (((o.def.能力?.能力 ?? []) as { 名称?: string }[]).some((x) => x.名称 === '同袍') && o.阵地) {
         const 自己 = g.players[o.操控者]!;
         const 邻 = 相邻阵地(o.阵地).map((s) => 自己.阵地[s])
           .filter((x): x is Obj => !!x && x !== o);
-        // 「具共通副类别」
         const 共通 = 邻.filter((x) => x.def.副类别.some((c) => o.def.副类别.includes(c)));
         const 借 = new Set<string>();
         for (const x of [o, ...共通]) {
           for (const y of (x.def.能力?.能力 ?? []) as { 名称?: string }[]) {
-            if (y.名称 && y.名称 !== '同袍') 借.add(y.名称);       // 「非同袍的」
+            if (y.名称 && y.名称 !== '同袍') 借.add(y.名称);
           }
         }
         if (借.size) {
@@ -199,43 +234,38 @@ function 收集候选(g: GameState): 候选效应[] {
           });
         }
       }
-      // 这里**不解析**关键词能力：静止式的关键词都是「遇到才检查」（有词 / 词值），
-      //   不产生候选效应。所以 kindless 的条目没有 种类、会被下面这行跳过。
       for (const ab of abs) {
         if (ab.种类 !== '静止式') continue;
-        if (ab.连续) {
-          out.push({
-            时间印记: o.时间印记, 来源: o, 控制器: o.操控者,
-            范围: ab.连续.范围, 筛选: ab.连续.筛选, 层: ab.连续.层,
-            是特征定义: ab.连续.层.定义武力 !== undefined || ab.连续.层.定义体力 !== undefined,
-            条件: ab.连续.条件,
-          });
-        }
-        if (ab.自身加成) {
-          // 604.3 特征定义能力：武力 = 印制值 + 每个「其他同名」的加成（层 7a）
-          //
-          // ⚠ 卡面是「只要你**操控**其他【同名】」—— **计数必须只算同一个操控者的**。
-          //   以前这里只比名字、**没比操控者**，于是**对手**打出同名单位也会给你 +1
-          //   （【魏新兵】就撞上过：对方打出魏新兵，我这边的魏新兵白涨 1 点武力）。
-          //   用 有效控制器 而不是 o.操控者 —— 操控权可能被效应改过。
-          // ⚠ **不能调 有效控制器** —— 它 → 计算特征 → 收集候选 → 又回到这里；
-          //   而防重入（算操控权中）只保护**同一个 uid**，遍历到的每个 x 都不一样，挡不住 → 死循环。
-          //   打出【魏新兵】卡死就是这么来的。和上面 702.28b 同袍那条一样：只读**基础操控者**。
-          const 我 = o.操控者;
-          const 其他 = g.战场.filter((x) =>
-            x !== o && x.操控者 === 我 && x.def.名称.some((n) => o.def.名称.includes(n))).length;
-          out.push({
-            时间印记: o.时间印记, 来源: o, 控制器: o.操控者,
-            // 必须限定「自身」—— 少了它，这条定义会套到**全场**同名单位上：
-            //   最后一项（时间印记最晚的）赢，于是对手的魏新兵会把你的武力也改掉。
-            //   「自身」在 符合选择器 里判的是 o === 锚，锚就是上面的 来源。
-            范围: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '自身' }] },
-            层: {
-              定义武力: (typeof o.def.武力 === 'number' ? o.def.武力 : 0) + (ab.自身加成.每个其他同名.武力 ?? 0) * 其他,
-              定义体力: (typeof o.def.体力上限 === 'number' ? o.def.体力上限 : 0) + (ab.自身加成.每个其他同名.体力上限 ?? 0) * 其他,
-            },
-            是特征定义: true,
-          });
+        for (const 效应 of (ab.效应 ?? [])) {
+          if (效应.类别 === '玩家持续') {
+            玩家候选表?.push({
+              时间印记: o.时间印记, 来源: o, 控制器: o.操控者,
+              适用: 效应.适用, 关键词: 效应.关键词, 条件: 效应.条件 ?? ab.条件,
+            });
+          }
+          if (效应.类别 === '物件持续') {
+            out.push({
+              时间印记: o.时间印记, 来源: o, 控制器: o.操控者,
+              范围: 效应.范围, 筛选: 效应.筛选, 层: 效应.层,
+              是特征定义: 效应.层.定义武力 !== undefined || 效应.层.定义体力 !== undefined,
+              条件: 效应.条件 ?? ab.条件,
+            });
+          }
+          if (效应.类别 === '特征定义') {
+            const 我 = o.操控者;
+            const 其他 = g.战场.filter((x) =>
+              x !== o && x.操控者 === 我 && x.def.名称.some((n) => o.def.名称.includes(n))).length;
+            out.push({
+              时间印记: o.时间印记, 来源: o, 控制器: o.操控者,
+              范围: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '自身' }] },
+              层: {
+                定义武力: (typeof o.def.武力 === 'number' ? o.def.武力 : 0) + (效应.每个其他同名.武力 ?? 0) * 其他,
+                定义体力: (typeof o.def.体力上限 === 'number' ? o.def.体力上限 : 0) + (效应.每个其他同名.体力上限 ?? 0) * 其他,
+              },
+              是特征定义: true,
+              条件: ab.条件,
+            });
+          }
         }
       }
       // 122.1b：实体上的关键词标记会让它获得该关键词能力（层6）
@@ -266,13 +296,14 @@ function 收集候选(g: GameState): 候选效应[] {
     out.push({
       时间印记: e.时间印记, 来源: e.来源, 控制器: e.控制器, 范围: e.范围,
       层: e.载荷.层, 是特征定义: false,
-      指定: e.指定 === undefined ? undefined : 找实体(g, e.指定), 指定uid: e.指定,
+      指定: e.指定 === undefined ? undefined : 找实体(g, e.指定), 指定实例: e.指定,
       受锁定: e.受锁定, 条件: e.条件,
     });
   }
   // 「直到回合结束」的临时效应（也是层 7c）
   for (const e of g.tempEffects ?? []) {
     if (e.种类 !== '加成') continue;
+    if (e.targetIid !== undefined && e.target.iid !== e.targetIid) continue;
     out.push({ 时间印记: e.时间印记 ?? 0, 来源: null, 控制器: 0, 指定: e.target,
       层: { 增减武力: e.武力, 增减体力: e.体力上限 }, 是特征定义: false });
   }
@@ -303,7 +334,7 @@ function 无能力集合(g: GameState, 候选表: 候选效应[]): Set<number> {
         //   → 有效特征 → 计算特征 —— 而 计算特征 又会调回 无能力集合，
         //   战场上 N 个物件就是 **N 的幂**，直接卡死（8 块领土就能挂住）。
         //   本函数开头的注释本来就说了这里「用基础特征做筛选判断…属于简化」。
-        if (匹配(g, c, x, 基础)) { s.add(x.uid); break; }
+        if (匹配(g, c, x, 基础)) { s.add(x.iid); break; }
       }
     }
   }
@@ -340,8 +371,7 @@ export const 关键词解析表: Record<string, (n: number | Value) => Ability> 
   突击: (n) => ({
     种类: '触发式', 触发: { 事件: '移动', 主体: '自身' },
     标签: '突击' + n,
-    效应: [{ 操作: '伤害', 来源: '自身', 事件: [{ 受方: { selectAll: { 筛选: [
-      { 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '关系', 值: '相对' }] } }, 点数: n }] }],
+    效应: [{ 操作: '伤害', 来源: '自身', 事件: [{ 受方: { selectRelation: '相对' }, 点数: n }] }],
   } as unknown as Ability),
   // 702.13b 迎击 N：「一个单位进入此单位的相对阵地时，对其造成 N 点伤害」
   迎击: (n) => ({
@@ -369,13 +399,15 @@ export const 关键词解析表: Record<string, (n: number | Value) => Ability> 
   暴击: (n) => ({ 种类: '静止式', 名称: '暴击', 数值: n }),
   压制: (n) => ({ 种类: '静止式', 名称: '压制', 数值: n }),
 转移: (n) => ({ 种类: '静止式', 名称: '转移', 数值: n }),
-  // 702.8a 破竹：静止式；**分伤害的规则在 engine.ts（带词 '破竹'）** —— 
+  // 702.8a 破竹：静止式；**分伤害的规则在 engine.ts（带词 '破竹'）** ——
   //   这里只登记，否则印在牌面上的破竹会被 基础特征 的「能解析」过滤掉，702.8b 永远走不到
   破竹: (n) => ({ 种类: '静止式', 名称: '破竹', 数值: n }),
   // 702.31b 叫阵：**行为在别处**（options.ts 列阵地表那一步）—— 这里只登记成关键词 ✓。
   //   ⚠ 2026-10 实测：没登记 → 骂阵兵 的 `特征.关键词 = []` → `有词(...,'叫阵')` 恒 false
   //   → options.ts 那段叫阵限制**从来没生效**（记录里：甲 左侧翼 骂阵兵，乙 却打到右边路）。
   叫阵: (n) => ({ 种类: '静止式', 名称: '叫阵', 数值: n }),
+  // 702.77 外交：真正展开在 解析能力 里（它需要 关联能力，不是数字）
+  外交: (n) => ({ 种类: '静止式', 名称: '外交', 数值: n }),
   // 702.2a 抵抗：静止式。**效果在 702.2b/c**（不能被瞄准 + 伤害被防止），引擎在那两处按名字查
   抵抗: (n) => ({ 种类: '静止式', 名称: '抵抗', 数值: n }),
   // 702.5a 附属：静止式。「附属于目标<物件或玩家>」—— 限制数术打出时的目标
@@ -406,12 +438,59 @@ export function 能解析(名称: string): boolean {
  * **直接解析关键词能力**：没有 `种类` 的条目就是关键词（判别方式），按 702 章展开。
  * 有 `种类` 的是手写的完整能力，原样返回。
  */
+/** 702.77c 外交：只要操控具特征的非领土实体，此物件便具有关联能力 */
+function 外交条件(特征?: 筛选): Condition {
+  return { 操作: '存在', 筛选: [
+    { 属性: '区域', 值: '战场' },
+    { 属性: '操控者', 值: '你' },
+    { 属性: '类别', 比较: '不是', 值: '领土' },
+    ...(特征 ?? []),
+  ] };
+}
+
+function 合并条件(a?: Condition, b?: Condition): Condition | undefined {
+  if (a && b) return { 操作: '与', 参数: [a, b] };
+  return a ?? b;
+}
+
+/** 给内部能力加外交条件；关键词内部包成“获得关键词” */
+function 加外交条件(ab: Ability, cond: Condition): Ability {
+  const 有种类 = (ab as { 种类?: string }).种类;
+  if (!有种类) {
+    return { 种类: '静止式', 效应: [{ 类别: '物件持续', 范围: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '自身' }] }, 层: { 获得关键词: [ab as 关键词能力] }, 条件: cond }] } as unknown as Ability;
+  }
+  if (有种类 === '触发式') {
+    const t = ab as TriggeredAbility;
+    if ('任一' in t.触发) {
+      return { ...t, 触发: { 任一: t.触发.任一.map((x) => ({ ...x, 条件: 合并条件(cond, x.条件) })) } } as unknown as Ability;
+    }
+    return { ...t, 触发: { ...t.触发, 条件: 合并条件(cond, t.触发.条件) } } as unknown as Ability;
+  }
+  if (有种类 === '静止式') {
+    const s = ab as StaticAbility;
+    // 关键词展开出来的静止式（只有 名称，没有连续）→ 包成获得关键词
+    if ((s as { 名称?: string }).名称 && !s.效应?.length) {
+      return { 种类: '静止式', 效应: [{ 类别: '物件持续', 范围: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '自身' }] }, 层: { 获得关键词: [s as unknown as 关键词能力] }, 条件: cond }] } as unknown as Ability;
+    }
+    return { ...s, 条件: 合并条件(cond, s.条件), 效应: (s.效应 ?? []).map((e) => e.类别 === '物件持续' ? { ...e, 条件: 合并条件(cond, (e as { 条件?: Condition }).条件) } : e) } as unknown as Ability;
+  }
+  if (有种类 === '启动式' || 有种类 === '特殊动作') {
+    const a = ab as { 条件?: Condition };
+    return { ...a, 条件: 合并条件(cond, a.条件) } as unknown as Ability;
+  }
+  return ab;
+}
+
 export function 解析能力(ab: Ability): Ability {
   if ((ab as { 种类?: string }).种类) return ab;                 // 手写的完整能力
   const k = ab as 关键词能力;
   // ⚠ 层6 授予的关键词是「名字+数字」一个字符串（'射击2'）—— 表里只有基名（'射击'），
   //   所以查表前先剥掉尾巴数字，并把那个数字当成 702.1b 的可变数值。
   const 基名 = 关键词基名(k.名称);
+  if (基名 === '外交') {
+    if (!k.关联能力) return ab;
+    return 加外交条件(解析能力(k.关联能力), 外交条件(k.特征));
+  }
   const 尾巴 = k.数值 === undefined && 基名 !== k.名称 ? Number(k.名称.slice(基名.length)) : undefined;
   const 定 = 关键词解析表[k.名称] ?? 关键词解析表[基名];
   if (!定) return ab;                                            // 没登记的沿用原样（不崩）
@@ -447,7 +526,7 @@ export function 关键词数值(g: GameState, o: Obj, 名: string): number {
   return 0;
 }
 /**
- * 登记一条**事件记录**（历史条件查它）。
+ * 登记一条**事件记录**（历史查询查它）。
  * 「沟通成本低」的原因：**登记点就是触发式能力已经在用的那批钩子**。
  * ⚠ 简版：只记 事件/来源/受方/数量。要拓展时见 docs/02 的说明。
  */
@@ -456,20 +535,20 @@ export function 记事件(g: GameState, 事件: 事件名, x: { 来源?: number;
 }
 
 /**
- * **历史条件查询** —— 这个实体过去有没有发生过这件事（Selector.历史 用）。
+ * **历史查询查询** —— 这个实体过去有没有发生过这件事（Selector.历史 用）。
  * 四个部件：**事件 × 角色 × 时段 × 数量**。
  */
-export function 发生过(g: GameState, o: Obj, 条: 历史条件): boolean {
+export function 发生过(g: GameState, o: Obj, 条: 历史查询): boolean {
   return g.事件记录.some((e) =>
     e.事件 === 条.事件
-    && (条.时段 === undefined || 条.时段 === '这盘游戏'
+    && (条.时段 === undefined
       || (条.时段 === '本回合' && e.回合 === g.turn)
       || (条.时段 === '上回合' && e.回合 === g.turn - 1)
       || (条.时段 === '本步骤' && e.回合 === g.turn && e.步骤 === g.当前步骤))
     // 角色：省略 = **这个实体在任一边**（不是「不检查实体」）
-    && (条.角色 === '来源' ? e.来源 === o.uid
-      : 条.角色 === '受方' ? e.受方 === o.uid
-        : e.来源 === o.uid || e.受方 === o.uid)
+    && (条.角色 === '来源' ? e.来源 === o.iid
+      : 条.角色 === '受方' ? e.受方 === o.iid
+        : e.来源 === o.iid || e.受方 === o.iid)
     && (条.数量 === undefined || 数量比较(e.数量 ?? 0, 条.数量)),
   );
 }
@@ -494,7 +573,7 @@ export function 符合选择器(g: GameState, o: Obj, sel: Selector | undefined,
    * ★ **B 阶段 2**：Selector 的顶层字段**翻译成 `筛选` 条件** ✓，判定**只有一条路**（`符合筛选` ✓）。
    *   ⚠ `历史` 不是筛选属性（它查引擎的事件记录 ✓）→ 仍然单独判 ✓，不混进来 ✗。
    */
-  // 历史条件  // 历史条件（「本回合受到过伤害的」…）—— 查引擎的事件记录，不属于"特征筛选" ✗
+  // 历史查询  // 历史查询（「本回合受到过伤害的」…）—— 查引擎的事件记录，不属于"特征筛选" ✗
   if (sel.历史 && !sel.历史.every((c) => 发生过(g, o, c))) return false;
   return 符合筛选(g, o, 条件, f, undefined, 记忆源, 锚, 控制器, 触发受方);
 }
@@ -521,24 +600,24 @@ export function 有效控制器(g: GameState, o: Obj): number {
   if (o.区域 !== '战场') return o.操控者;
   // ⚠ 递归保护：算操控权要 计算特征 → 符合选择器 → 又可能问操控权。
   //   同一个物件在算的过程中直接返回基础值（此时它就是「还没被改过」的）。
-  if (算操控权中.has(o.uid)) return o.操控者;
-  算操控权中.add(o.uid);
-  try { return 算有效控制器(g, o); } finally { 算操控权中.delete(o.uid); }
+  if (算操控权中.has(o.iid)) return o.操控者;
+  算操控权中.add(o.iid);
+  try { return 算有效控制器(g, o); } finally { 算操控权中.delete(o.iid); }
 }
 function 算有效控制器(g: GameState, o: Obj): number {
   // ⚠ **只算到层 2**：改操控权是层 2 的效应，它该在「层 2 之前」的特征上匹配。
   //   以前这里调完整 计算特征，既让一次属性访问触发世界重算（递归源头），
   //   又让层 2 看到了层 4/6/7 之后的样子 —— 层序错了。
   const s = 取快照(g);
-  const 有 = s.操控者.get(o.uid);
+  const 有 = s.操控者.get(o.iid);
   if (有 !== undefined) return 有;                        // 同一状态版本内直接复用 ✓
   const f = 计算到层(g, o, 2);
   const 层2 = s.候选.filter((c) => c.层.操控权 !== undefined && 匹配(g, c, o, f));
-  if (!层2.length) { s.操控者.set(o.uid, o.操控者); return o.操控者; }
+  if (!层2.length) { s.操控者.set(o.iid, o.操控者); return o.操控者; }
   层2.sort((a, b) => a.时间印记 - b.时间印记);
   const 尾 = 层2[层2.length - 1]!;
   const 值 = 尾.层.操控权 === '你' ? 尾.控制器 : o.操控者;
-  if (!s.构建中) s.操控者.set(o.uid, 值);
+  if (!s.构建中) s.操控者.set(o.iid, 值);
   return 值;
 }
 
@@ -546,10 +625,13 @@ function 匹配(g: GameState, c: 候选效应, o: Obj, f: 特征, 判断?: 条�
   // ⚠ 611.2b 的「只要……」**必须排在最前面** ——
   //   它在 指定 型效应上同样要判（【降服】就是指定型的），排在后面会被提前 return 掉
   if (c.条件 && !条件成立(g, o, c.条件, c.来源, 判断)) return false;
-  if (c.受锁定 && !c.受锁定.includes(o.uid)) return false;   // 611.2c 锁定的物件组不再改变
-  // ⚠ 派生自 `g.连续效应` 的：**按 uid 比** —— 目标已经不在场上了就**谁都不匹配**，
+  // 611.2c：结算时已经锁定物件组 —— 名单就是最终范围，不再按原始 范围/筛选 重算。
+  //   （以前这里只做“不在名单 → 拒绝”，后面还会再算一次范围；范围里若有 {记忆}/触发受方
+  //    这类上下文，应用时拿不到 → 名单里的单位也被否掉，096 煽风点火就这样失效。）
+  if (c.受锁定) return c.受锁定.includes(o.iid);
+  // ⚠ 派生自 `g.连续效应` 的：**按实例 iid 比** —— 目标已经不在场上了就**谁都不匹配**，
   //   不能因为「找不到那个实体」就退回范围匹配（那会让效应漫延，见字段说明）。
-  if (c.指定uid !== undefined) return c.指定uid === o.uid;
+  if (c.指定实例 !== undefined) return c.指定实例 === o.iid;
   if (c.指定) return c.指定 === o;                           // 内部候选：直接就是那个物件
   if (!符合选择器(g, o, c.范围, c.来源, c.控制器, f)) return false;
   if (!符合筛选(g, o, c.筛选, f)) return false;
@@ -560,7 +642,7 @@ export type 条件判断 = (c: unknown) => boolean;
 
 /**
  * **611.2b「只要……」条件成立吗**。
- * 条件在结算时已经把目标**解析成 uid** 了（见 持续 操作），所以这里不需要 StackItem。
+ * 条件在结算时已经把目标**解析成实例 iid** 了（见 持续 操作），所以这里不需要 StackItem。
  * 内建认识 `附属在`（306.4b）；别的形状交给调用方传的 `判断` 回调。
  */
 function 条件成立(g: GameState, o: Obj, 条件: unknown, 来源: Obj | null, 判断?: 条件判断): boolean {
@@ -594,7 +676,7 @@ function 取印制值(o: Obj, a: 筛选属性): (string | number)[] {
     case '势力': return d.势力 ?? [];
     case '超类别': return d.超类别 ?? [];
     case '打出费用': {
-    // ★ 统一后 打出费用 是 费用行为[]（或旧数字 / 'X'）→ 必须走 牌面费用值 取数 ✗ 不能再判 typeof
+    // ★ 统一后 打出费用 是 费用步[]（或旧数字 / 'X'）→ 必须走 牌面费用值 取数 ✗ 不能再判 typeof
     //   108.3g：带 X 的牌在堆叠以外 X 视同 0 → 'X' 一律按 0 ✓
     const v = 牌面费用值(d.打出费用);
     return [v === 'X' ? 0 : v];
@@ -621,7 +703,7 @@ function 取特征值(g: GameState | undefined, o: Obj, a: 筛选属性, f: 特�
     case '势力': return f.势力 ?? [];
     case '超类别': return f.超类别;
     case '打出费用': {
-    // ★ 统一后 打出费用 是 费用行为[]（或旧数字 / 'X'）→ 必须走 牌面费用值 取数 ✗ 不能再判 typeof
+    // ★ 统一后 打出费用 是 费用步[]（或旧数字 / 'X'）→ 必须走 牌面费用值 取数 ✗ 不能再判 typeof
     //   108.3g：带 X 的牌在堆叠以外 X 视同 0 → 'X' 一律按 0 ✓
     const v = 牌面费用值(d.打出费用);
     return [v === 'X' ? 0 : v];
@@ -663,15 +745,15 @@ function 取特征值(g: GameState | undefined, o: Obj, a: 筛选属性, f: 特�
 
 /** 单个条件的比较 —— 值由 c.印制 决定取哪一边 */
 function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, 记忆源?: Obj,
-  锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number): boolean {
+  锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number, 锚阵地?: 阵地 | null, 锚操控者?: number): boolean {
   // ★ B：关系/几何/状态类条件也走 筛选 ✓（它们不是"特征值"，要锚/控制器/触发受方 ✓）
   const 符合种类0 = (k: string): boolean =>
     k === '实体' || k === '物件' ? true : k === '令符' ? false : (f.类别 as string[]).includes(k);
   switch (c.属性) {
     case '自身': return o === (锚 ?? null);
     case '除自身': return o !== (锚 ?? null);
-    case '所附属': return !!锚 && 锚.附属在 !== undefined && 锚.附属在 === o.uid;
-    case '所佩带': return !!锚 && 锚.佩带在 !== undefined && 锚.佩带在 === o.uid;
+    case '所附属': return !!锚 && 锚.附属在 !== undefined && 锚.附属在 === o.iid;
+    case '所佩带': return !!锚 && 锚.佩带在 !== undefined && 锚.佩带在 === o.iid;
     case '种类': return 符合种类0(String(c.值 ?? ''));
     case '非种类': return !符合种类0(String(c.值 ?? ''));
     case '相对阵地为空': {
@@ -686,9 +768,9 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
       return 要空 ? !对面 : !!对面;
     }
     case '附属于':
-      return !!锚 && o.附属在 === 锚.uid;
+      return !!锚 && o.附属在 === 锚.iid;
     case '佩带于':
-      return !!锚 && o.佩带在 === 锚.uid;
+      return !!锚 && o.佩带在 === 锚.iid;
     case '操控者': {
       const 控 = 有效控制器(g, o);
       // 值可以是 { 记忆: 键 }：读记住的玩家号（096「目标玩家的单位」）
@@ -711,17 +793,18 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
       return false;
     }
     case '关系': {
-      if (!锚 || !锚.阵地) return false;
+      const 位 = 锚阵地 !== undefined ? 锚阵地 : (锚?.阵地 ?? null);
+      const 控 = 锚操控者 !== undefined ? 锚操控者 : 锚?.操控者;
+      if (位 === null || 控 === undefined) return false;
       // 值可以是数组：「相对或斜对」
       const 名们 = (Array.isArray(c.值) ? c.值 : [c.值 ?? '相对']).map(String);
-      const 锚阵地 = 锚.阵地;
-      const 自己 = g.players[锚.操控者]!;
-      const 敌 = g.players[(锚.操控者 + 1) % g.players.length]!;
+      const 自己 = g.players[控]!;
+      const 敌 = g.players[(控 + 1) % g.players.length]!;
       const 允许: (Obj | null)[] = [];
       for (const 名 of 名们) {
-        if (名 === '相对') 允许.push(敌.阵地[相对阵地(锚阵地)!]);
-        else if (名 === '相邻') 允许.push(...相邻阵地(锚阵地).map((x) => 自己.阵地[x]));
-        else 允许.push(...斜对阵地(锚阵地).map((x) => 敌.阵地[x]));
+        if (名 === '相对') 允许.push(敌.阵地[相对阵地(位)!]);
+        else if (名 === '相邻') 允许.push(...相邻阵地(位).map((x) => 自己.阵地[x]));
+        else 允许.push(...斜对阵地(位).map((x) => 敌.阵地[x]));
       }
       return 允许.includes(o);
     }
@@ -776,6 +859,9 @@ export interface 判定上下文 {
   特征?: 特征;
   /** 阵地域：这个阵地属于谁的半场 */
   半场?: number;
+  /** 来源位置（LKI 时没有当前物件，关系筛选靠这两个字段） */
+  锚阵地?: 阵地 | null;
+  锚操控者?: number;
 }
 
 function 比较数或值(有的: number | string, c: 筛选条件): boolean {
@@ -840,17 +926,17 @@ function 符合阵地条件(ctx: 判定上下文, s: 阵地, c: 筛选条件): b
 export function 符合域(ctx: 判定上下文, 主体: Obj | number | 阵地, 域: 筛选域, 条件?: 筛选): boolean {
   if (!条件 || !条件.length) return true;
   if (域 === '物件') {
-    return 符合筛选(ctx.g, 主体 as Obj, 条件, ctx.特征, undefined, ctx.记忆源, ctx.锚 ?? null, ctx.控制器, ctx.触发受方);
+    return 符合筛选(ctx.g, 主体 as Obj, 条件, ctx.特征, undefined, ctx.记忆源, ctx.锚 ?? null, ctx.控制器, ctx.触发受方, ctx.锚阵地, ctx.锚操控者);
   }
   if (域 === '玩家') return 条件.every((c) => 符合玩家条件(ctx, 主体 as number, c));
   return 条件.every((c) => 符合阵地条件(ctx, 主体 as 阵地, c));
 }
 
 export function 符合筛选(g: GameState, o: Obj, 条件表?: 筛选, f?: 特征, 判断?: 条件判断, 记忆源?: Obj,
-  锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number): boolean {
+  锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number, 锚阵地?: 阵地 | null, 锚操控者?: number): boolean {
   if (!条件表 || 条件表.length === 0) return true;
   const 特征 = f ?? 计算特征(g, o, 判断);
-  return 条件表.every((c) => 符合一个条件(g, o, c, 特征, 记忆源, 锚, 控制器, 触发受方));
+  return 条件表.every((c) => 符合一个条件(g, o, c, 特征, 记忆源, 锚, 控制器, 触发受方, 锚阵地, 锚操控者));
 }
 
 /**
@@ -893,11 +979,11 @@ const 层栈: number[] = [];
 export function 当前上限层(): number { return 层栈.length ? 层栈[层栈.length - 1]! : 7; }
 
 export function 计算到层(g: GameState, o: Obj, 上限层: number, 判断?: 条件判断): 特征 {
-  if (算特征中.has(o.uid)) return 基础特征(o);          // ⚠ 上下文相关 → **不进 memo** ✓
+  if (算特征中.has(o.iid)) return 基础特征(o);          // ⚠ 上下文相关 → **不进 memo** ✓
   const s = 取快照(g);
   const 用判断 = 判断 !== undefined;
   /**
-   * ⚠ **只有"真物件"才进 memo** ✓ —— 键是 `uid:层:判断` ✓，所以**没有 uid 的伪物件**
+   * ⚠ **只有"真物件"才进 memo** ✓ —— 键是 `iid:层:判断` ✓，所以**没有 iid 的伪物件**
    *   （`实际打出费用` 用的 `{ def } as Obj` ✓、筛选/条件里那种"只是想问 def"的 ✓）
    *   **必须每次现算** ✗→✓。
    *   否则所有伪物件共用 `undefined:…` 这一格 ✗ → **先问谁就返回谁的特征** ✗
@@ -905,24 +991,24 @@ export function 计算到层(g: GameState, o: Obj, 上限层: number, 判断?: �
    *     单位拿着先问过的【看破】的特征 ✓ 通过了"类别=锦囊"的筛选 ✓、
    *     再吃 −2 被 `max(0, …)` 夹成 0 ✓，看起来就是"第一个令符 −1" ✓）。
    */
-  const 可缓存 = typeof o.uid === 'number';
-  const 键 = o.uid + ':' + 上限层 + ':' + (用判断 ? 1 : 0);
+  const 可缓存 = typeof o.iid === 'number';
+  const 键 = o.iid + ':' + 上限层 + ':' + (用判断 ? 1 : 0);
   if (可缓存 && !s.构建中) {
     const 有 = s.特征.get(键);
     if (有) return 有;
   }
-  算特征中.add(o.uid);
+  算特征中.add(o.iid);
   算特征深度++;
   层栈.push(上限层);
   try {
     // ⚠ **条件始终求值** ✓（原来「嵌套一层就不求」✗ = 深层条件静默按「不拦」✓→✗）。
-    //   不会指数爆炸，因为：① 结果进了 memo（每个 (uid, 层, 是否带判断) 每版本只算一次 ✓）；
+    //   不会指数爆炸，因为：① 结果进了 memo（每个 (iid, 层, 是否带判断) 每版本只算一次 ✓）；
     //   ② 嵌套查询被 `当前上限层()` 限制在 ≤ 本层 ✓ → 跨层严格递减 ✓；
     //   ③ 同层回环由 `算特征中` 兜住（回到 基础特征 ✓）。
     const 值 = 计算特征内(g, o, 判断, 上限层);
     if (可缓存 && !s.构建中) s.特征.set(键, 值);           // 构建期间算出来的**不写** ✓（见 取快照 的说明 ✓）
     return 值;
-  } finally { 层栈.pop(); 算特征中.delete(o.uid); 算特征深度--; }
+  } finally { 层栈.pop(); 算特征中.delete(o.iid); 算特征深度--; }
 }
 /* ── 派生快照 ────────────────────────────────────────────────────
    ⚠ **按 `g` 键**（`WeakMap` ✓），不是模块级单槽 ✗ —— 单槽在多房间下会互相冲刷 ✓，
@@ -942,6 +1028,9 @@ interface 快照 {
   桶: Partial<Record<层键, 候选效应[]>>;
   特征: Map<string, 特征>;
   操控者: Map<number, number>;
+  /** 613.10：玩家级持续效应（目前只有关键词） */
+  玩家候选: 玩家候选[];
+  玩家特征: Map<string, 玩家特征>;
   构建中: boolean;
 }
 const 快照表 = new WeakMap<GameState, 快照>();
@@ -950,11 +1039,13 @@ function 取快照(g: GameState): 快照 {
   const 版本 = g.状态版本 ?? 0;
   const 旧 = 快照表.get(g);
   if (旧 && 旧.版本 === 版本) return 旧;
-  const s: 快照 = { 版本, 候选: [], 可用候选: [], 无能力: new Set(), 桶: {}, 特征: new Map(), 操控者: new Map(), 构建中: true };
+  const s: 快照 = { 版本, 候选: [], 可用候选: [], 无能力: new Set(), 桶: {}, 特征: new Map(), 操控者: new Map(), 玩家候选: [], 玩家特征: new Map(), 构建中: true };
   快照表.set(g, s);                          // ⚠ **先挂上再算**：下面两步可能重入 ✓（重入会拿到 构建中 的快照 ✓）
-  s.候选 = 收集候选(g);
+  const 玩家候选表: 玩家候选[] = [];
+  s.候选 = 收集候选(g, 玩家候选表);
+  s.玩家候选 = 玩家候选表;
   s.无能力 = 无能力集合(g, s.候选);
-  s.可用候选 = s.候选.filter((c) => !(c.来源 && s.无能力.has(c.来源.uid)));
+  s.可用候选 = s.候选.filter((c) => !(c.来源 && s.无能力.has(c.来源.iid)));
   s.构建中 = false;
   return s;
 }
@@ -970,7 +1061,7 @@ function 计算特征内(g: GameState, o: Obj, 判断?: 条件判断, 上限层 
   // 层6：失去所有能力的物件，以及它作为来源产生的效应，都要剔除
   // （613.6 的例外没有完整建模：一个效应若已在前面的层生效，本应继续生效）
   const 无能力 = s.无能力;
-  const 失去能力 = 无能力.has(o.uid);
+  const 失去能力 = 无能力.has(o.iid);
   const 候选 = s.可用候选;
   f.失去所有能力 = 失去能力 || f.失去所有能力;
 
@@ -1031,8 +1122,8 @@ function 计算特征内(g: GameState, o: Obj, 判断?: 条件判断, 上限层 
   // 层7c：增减（含标记）
   for (const c of 适用('层7c', (x) => x.层.增减武力 !== undefined || x.层.增减体力 !== undefined)) {
     // 层 7c 的数值可以是固定数，也可以是 Value（用**这个层所属效应的来源**当记忆源）
-    f.武力 += 层值(c.层.增减武力 ?? 0, c.来源);
-    f.体力上限 += 层值(c.层.增减体力 ?? 0, c.来源);
+    f.武力 += 层值(c.层.增减武力 ?? 0, c.来源, g);
+    f.体力上限 += 层值(c.层.增减体力 ?? 0, c.来源, g);
   }
   // 层7d：交换
   for (const c of 适用('层7d', (x) => x.层.交换武力体力 === true)) {
@@ -1043,8 +1134,8 @@ function 计算特征内(g: GameState, o: Obj, 判断?: 条件判断, 上限层 
   return f;
 }
 
-function 找实体(g: GameState, uid: number): Obj | undefined {
-  for (const o of g.战场) if (o.uid === uid) return o;
+function 找实体(g: GameState, iid: number): Obj | undefined {
+  for (const o of g.战场) if (o.iid === iid) return o;
   return undefined;
 }
 
@@ -1056,4 +1147,63 @@ export function 属于类别(g: GameState, o: Obj, 类别: CardType, 判断?: �
 /** 这个物件当前是否具有某个关键词能力（层6 生效后） */
 export function 具有关键词(g: GameState, o: Obj, 关键词: string, 判断?: 条件判断): boolean {
   return 计算特征(g, o, 判断).关键词.some((k) => k.名称 === 关键词);
+}
+
+
+/* ── 613.10：玩家级持续性效应 ─────────────────────────────────── */
+
+/** 玩家的「只要…」条件求值器。来源是这条效应的来源（曹仁等）。 */
+export type 玩家条件判断 = (c: unknown, 来源: Obj | null) => boolean;
+
+const 算玩家特征中 = new Set<number>();
+
+function 玩家适用(g: GameState, 适用: 玩家连续效应['适用'], p: number, 控制器: number, 来源: Obj | null): boolean {
+  if (适用 === '任意') return true;
+  if (适用 === '你') return p === 控制器;
+  if (适用 === '对手') return p !== 控制器;
+  if (适用 && typeof 适用 === 'object' && '筛选' in 适用) {
+    return 符合域({ g, 控制器, 锚: 来源 ?? null }, p, '玩家', 适用.筛选);
+  }
+  return false;
+}
+
+/**
+ * **玩家当前的特征**（613.10）。
+ *
+ * 和物件的【计算特征】分开：玩家没有 iid/区域/阵地，不能塞进 613 的物件层。
+ * 613.10 说玩家级效应在物件特征之后按时间印记生效 —— 所以这里是独立的派生量。
+ *
+ * 目前只存关键词（702.1c 允许「物件和/或玩家」获得关键词）。
+ * 条件求值由 engine 注入，避免 continuous 与 engine 的循环依赖。
+ */
+export function 计算玩家特征(g: GameState, p: number, 判断?: 玩家条件判断): 玩家特征 {
+  const s = 取快照(g);
+  const 键 = p + ':' + 当前上限层() + ':' + (判断 ? 1 : 0);
+  if (!s.构建中) {
+    const 有 = s.玩家特征.get(键);
+    if (有) return 有;
+  }
+  // 递归护栏：玩家条件里若又问回玩家特征，先按「空特征」处理，且不写缓存。
+  if (算玩家特征中.has(p)) return { 关键词: [] };
+  算玩家特征中.add(p);
+  try {
+    const f: 玩家特征 = { 关键词: [] };
+    const 候选 = [...s.玩家候选].sort((a, b) => a.时间印记 - b.时间印记);
+    for (const c of 候选) {
+      // 来源失去所有能力 → 它产生的持续性效应一起停止（和物件候选同一条规则）
+      if (c.来源 && s.无能力.has(c.来源.iid)) continue;
+      const 控制器 = c.来源 ? 有效控制器(g, c.来源) : c.控制器;
+      if (!玩家适用(g, c.适用, p, 控制器, c.来源)) continue;
+      // 条件：没有求值器就不成立（不兜底成「任意」）
+      if (c.条件 && !(判断 ? 判断(c.条件, c.来源) : false)) continue;
+      if (c.关键词?.length) {
+        // 702.1d / 702.6d：授予就是「加到它身上」，多个同名不去重
+        f.关键词 = [...f.关键词, ...c.关键词.map((k) => ({ ...k, 印制: false }))];
+      }
+    }
+    if (!s.构建中) s.玩家特征.set(键, f);
+    return f;
+  } finally {
+    算玩家特征中.delete(p);
+  }
 }

@@ -1,21 +1,21 @@
 /**
- * **费用行为列表的读取工具**（602.1d）。
+ * **费用步列表的读取工具**（602.1d）。
  *
- * 费用是 `费用行为[]`（见 types.ts）：一条行为一个 `操作`，顺序就是支付顺序。
+ * 费用是 `费用步[]`（见 types.ts）：一条行为一个 `操作`，顺序就是支付顺序。
  * 引擎各处只按 `操作` 取行为，不按下标、不猜位置 —— 以后往列表里插新行为不会挪动别的读取点。
  */
-import type { 费用行为 } from './types.js';
+import type { 费用步 } from './types.js';
 
 /**
- * 取某一种费用行为。没有 = `undefined`（省略的费用 = 不用付）。
+ * 取某一种费用步。没有 = `undefined`（省略的费用 = 不用付）。
  * ⚠ 同一操作的多种参数用**一条行为**表达（例如弃牌带 筛选 / 宣告X）——
  *   所以「同类行为有多条」不是合法数据，取第一条即可。
  */
-export function 取费用行为<K extends 费用行为['操作']>(
-  费用: readonly 费用行为[] | undefined,
+export function 取费用步<K extends 费用步['操作']>(
+  费用: readonly 费用步[] | undefined,
   操作: K,
-): Extract<费用行为, { 操作: K }> | undefined {
-  return 费用?.find((x): x is Extract<费用行为, { 操作: K }> => x.操作 === 操作);
+): Extract<费用步, { 操作: K }> | undefined {
+  return 费用?.find((x): x is Extract<费用步, { 操作: K }> => x.操作 === 操作);
 }
 
 /**
@@ -23,8 +23,8 @@ export function 取费用行为<K extends 费用行为['操作']>(
  *   · `宣告X: true` → 下限 0，实际 X 由操控者另给（`宣告X`）；
  *   · 否则 = `点数.最小`（数据里固定费用的 最小/最大 同值）。
  */
-export function 支付费用(费用: readonly 费用行为[] | undefined): { 宣告X: boolean; 点数: number } {
-  const 支 = 取费用行为(费用, '支付');
+export function 支付费用(费用: readonly 费用步[] | undefined): { 宣告X: boolean; 点数: number } {
+  const 支 = 取费用步(费用, '支付');
   const p = 支?.点数;
   // 兼容期：数字 / Value（这里不解，按 0）/ 旧区间（取最小）
   const 点数 = typeof p === 'number' ? p : (p && typeof p === 'object' && '最小' in p ? (p as { 最小: number }).最小 : 0);
@@ -32,16 +32,16 @@ export function 支付费用(费用: readonly 费用行为[] | undefined): { 宣
 }
 
 /**
- * **牌面打出费用 → 数字或 'X'** ✓（统一期的取数口）：`支付费用()` 只认费用行为列表，
+ * **牌面打出费用 → 数字或 'X'** ✓（统一期的取数口）：`支付费用()` 只认费用步列表，
  * 而牌面可能还是旧的 `数字` / `'X'` 写法 ✓。
  */
-export function 牌面费用值(费用: number | 'X' | readonly 费用行为[] | undefined): number | 'X' {
+export function 牌面费用值(费用: number | 'X' | readonly 费用步[] | undefined): number | 'X' {
   if (费用 === undefined) return 0;
   if (typeof 费用 === 'number' || 费用 === 'X') return 费用;
-  // ★ 统一后的 费用行为[]：取 支付.点数 求值 ✓
+  // ★ 统一后的 费用步[]：取 支付.点数 求值 ✓
   //   纯 'X' 仍原样返回 ✓（调用方要靠它判「要不要宣告 X」✓）
   //   {X+2} → 2 ✓（108.3g：带 X 的牌在堆叠以外，X 视同 0 ✓）；{X}{X} → 0 ✓
-  const v = 取费用行为(费用, '支付')?.点数;
+  const v = 取费用步(费用, '支付')?.点数;
   if (v === 'X') return 'X';
   return 费用点数值(v, 0);
 }

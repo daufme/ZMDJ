@@ -9,7 +9,7 @@
  *   状态里塞判断逻辑的代价是「谁都能改，谁也不知道什么时候改的」。
  */
 import type { TargetSpec } from './types.js';
-import type { CardType, Faction, 筛选, 层修改, CardDef, 阵地, SupportMap, Support, Selector, 事件名, 玩家动作, ReplacementSpec, 规则限制 } from './types.js';
+import type { CardType, Faction, 筛选, 层修改, CardDef, 阵地, SupportMap, Support, Selector, 事件名, 玩家动作, ReplacementSpec, 规则动作 } from './types.js';
 // ⚠ 循环 import：continuous.ts 也 import 本文件。ESM 的实时绑定 + 只在函数体内调用，运行时安全。
 import { 有效控制器 } from './continuous.js';
 import { 阵地顺序 } from './types.js';
@@ -134,7 +134,7 @@ export interface 连续载荷 {
 }
 
 export interface 连续效应 {
-  /** 611.2b 的「只要……」—— 条件不成立时这个效应没有任何效果（目标已解析成 uid） */
+  /** 611.2b 的「只要……」—— 条件不成立时这个效应没有任何效果（目标已解析成实例 iid） */
   条件?: { 操作: string; 目标?: string };
   id: number;
   /** 613.7b 时间印记 */
@@ -153,8 +153,22 @@ export interface 连续效应 {
   指定?: number;
 }
 
+export interface LKI {
+  iid: number; uid: number; def: CardDef;
+  区域: Zone; 操控者: number; 拥有者: number; 阵地: 阵地 | null;
+  名称: string; 类别: string[]; 副类别: string[]; 超类别: string[];
+  武力: number | null; 体力上限: number | null; 关键词: unknown[];
+  damage: number; tapped: boolean; 面: '明置' | '暗置';
+  标记: readonly unknown[]; 时间印记: number;
+}
+
 export interface Obj {
+  /** 物理牌身份：换区域不变 */
   uid: number;
+  /** 区域实例身份：换区域重新分配（400.7） */
+  iid: number;
+  /** 换区域前的最后已知信息（400.7 / 603.7 LKI） */
+  lastKnown?: LKI;
   def: CardDef;
   /**
    * **拥有者**（**109.3**：游戏开始时套牌中包含该牌的玩家；指示物见 112.2）。
@@ -206,17 +220,26 @@ export interface Obj {
   /** 112.1：这是不是一个指示物（704.5k：指示物单位离开战场就消失） */
   是指示物?: boolean;
   /**
-   * 305.5a：这个**装备**佩带在哪个单位上（存单位的 uid；null/undefined = 未佩带）。
+   * 305.5a：这个**装备**佩带在哪个单位上（存单位的 iid；null/undefined = 未佩带）。
    * 装备进场时并未佩带（305.5b），要靠「佩带」这个启动式能力（702.7b）附上去。
    */
   readonly 佩带在?: number;
   /**
-   * 306.4b：这个**数术/阵略**附属于哪个实体或玩家（存 uid 或玩家号）。
+   * 306.4b：这个**数术/阵略**附属于哪个实体或玩家（存 iid 或玩家号）。
    * 306.4a：数术进场时按它的**附属能力**（702.5）指定目标，然后附上去。
    */
   readonly 附属在?: number;
   /** 牌自己的跨回合记忆；离开战场时清空（【黑水祭天】的「已选模式」） */
   readonly 记忆: Record<string, unknown>;
+  /** 复制状态；def 已经是冻结的可复制特征，原def 只用于离场恢复 */
+  复制?: 复制标记;
+}
+
+/** 708：复制品保留自己的 iid/操控者/阵地/状态，只替换可复制特征。 */
+export interface 复制标记 {
+  源iid: number;
+  /** 作为复制进场的实体牌离场时恢复；复制指示物没有这一项 */
+  原def?: CardDef;
 }
 
 export interface PlayerState {
@@ -241,7 +264,7 @@ export interface PlayerState {
    * **这个玩家无视哪些规则限制**（103 古铜镇尺：付 2 的玩家无视「不能搜寻」直到回合结束）。
    * `来源` = 只无视那个物件的限制；省略 = 所有来源。到期之后查询时自动失效。
    */
-  豁免?: { 禁止: 规则限制['禁止']; 来源?: number; 到期: number }[];
+  豁免?: { 禁止: 规则动作; 来源?: number; 到期: number }[];
   landsPlayedThisTurn: number;
   /** 因试图从空牌库抓牌而待判负（704.5b） */
   drewFromEmptyLibrary: boolean;
@@ -253,12 +276,35 @@ export interface PlayerState {
   统帅区: Obj[];
 }
 
+/** 一次触发事件（不是规则术语）：受方 = 事件承受者，数量/死者位置/来源都是同一次事件的信息 */
+export interface 触发事件 {
+  事件?: string;
+  /** 事件受体/来源在事件发生时的 LKI */
+  受方快照?: LKI;
+  来源快照?: LKI;
+  /** 400.7e：事件发生前后的实例号 */
+  原iid?: number;
+  新iid?: number;
+  /** 事件里承受它的对象：被打的玩家、进场的单位、死去的单位… */
+  受方?: number | Obj;
+  /** 伤害量之类 */
+  数量?: number;
+  /** 死去时它原来占的阵地（700.4；进墓地后 o.阵地 已清空） */
+  死者位置?: 阵地 | null;
+  /** 事件的来源（造成伤害的那个单位），不等于能力来源 */
+  来源?: Obj | null;
+}
+
 export interface StackItem {
   /** ⚠ 301.11：等着**选阵地落位**的单位（同步函数发不了问 ✓ → 记这里 ✓ 由 执行步骤 接手 ✓） */
   待放战场?: Obj[];
   /** 上面那批的操控者（缺省 = item.操控者 ✓） */
   待放战场控?: number;
   id: number;
+  /** 601.1a：已进入堆叠、但模式/目标/费用还没选完的打出。 */
+  待完成?: boolean;
+  /** 待完成打出原先所在的区域（取消/失败时移回）。 */
+  待完成原区域?: Obj['区域'];
   种类: '令符' | '触发式' | '启动式';
   标签: string;
   操控者: number;
@@ -274,6 +320,10 @@ export interface StackItem {
   /** 条件执行 里跑到第几个子步（挂起后从那里继续；步 = 外层步骤游标） */
   子步?: { 步: number; 子: number };
   目标槽?: Record<string, Obj | number | { 堆叠项: number }>;
+  /** 选目标时的实例 iid（400.7：目标换区域后旧实例失效） */
+  目标实例?: Map<Obj, number>;
+  /** 已经派发过“被指定为目标”的目标键；目标后落定时用它去重。 */
+  目标已派发?: Set<string>;
   /**
    * **这一步刚被玩家选中的东西** —— 一次性：本步取走后立刻清掉。
    * ⚠ 它不是「槽」：没有名字、不跨步、不进历史。选是**这一步的输入**，用完就没，
@@ -296,21 +346,25 @@ export interface StackItem {
   chosenSlot?: 阵地;
   /** 108.3a：打出时宣告的 X。108.3g：不在堆叠上时视同 0 */
   宣告X?: number;
-  /** 触发这件事的那个受方（玩家号或物件）—— 「该玩家」/「该单位」靠它（见 RecipientRef 的 触发受方） */
-  触发受方?: number | Obj;
+  /** 触发事件上下文（受方/数量/死者位置/事件来源）—— 「该玩家」「该单位」靠它 */
+  事件?: 触发事件;
+  /** 触发源在触发时的 LKI（离开后仍可用） */
+  来源快照?: LKI;
   /** 打出时作为**额外费用**牺牲掉的那个单位（109 舍生取义） */
   额外牺牲?: Obj;
   /** 601.2f：作为额外费用被放逐的牌（058 用它算伤害） */
   额外放逐?: Obj;
   /** 产生这个堆叠项的**能力名字**（射击 / 佩带 …）—— 702.10c「射击伤害」靠它判（106 蒋钦） */
   能力名?: string;
-  /** 见 待触发.死者位置（134 黄铜传道者：指示物放在死者原来的阵地） */
-  死者位置?: 阵地 | null;
-  chosenMode?: number;
+  /** 700.2b / 601.1b：选中的模式（选项号）；多个模式按卡面选项顺序 */
+  chosenModes?: number[];
+  /** 与 steps 平行：这一条步骤属于第几个模式实例 */
+  步骤模式?: number[];
+  /** 当前正在执行第几个模式实例（目标槽命名空间） */
+  当前模式?: number;
   /** 观星（701.5）的两问相位：问过顶 / 问过底（答完记在 item 上，见 观星 的实现） */
   观星已问顶?: boolean;
   观星已问底?: boolean;
-  可选?: boolean;
   steps: import('./types.js').ResolveStep[];
   /**
    * 效应链的**暂存位**：搜寻出来的牌先放这里，等后续 操作 决定去处。
@@ -332,8 +386,24 @@ export interface StackItem {
      * 每条效应开始时先清成 false，由真正做了事的操作置回 true。
      */
     上一步生效?: boolean;
+  /** 「你可以」段/动作的结果：true=做了，false=取消/没做。 */
+  可选结果?: Record<string, boolean>;
+  /** 正在结算的带结果可选段；结束 = 取消时要跳到的游标。 */
+  可选当前?: { 结果: string; 结束: number };
   /** 没有来源（开局那种合成链）时，记到 的值存这里 */
   记忆?: Record<string, unknown>;
+  /** 708.5：这张牌进场前的复制选择已经作过（包括选择不复制）。 */
+  复制已选?: boolean;
+  /** 708.5：当前选中的「作为复制」替代效应键（多个复制效应时先选效应）。 */
+  复制效应?: string;
+  /** 708.5 / 708.9e：已经生效过的复制替代效应键；复制进场后新获得的复制效应还要继续处理。 */
+  复制已用?: string[];
+  /** 708.10：这是堆叠上的令符复制（不是实体牌本身）。 */
+  复制令符?: boolean;
+  /** 这条堆叠项在进入堆叠时使用的目标规格（708.10c 复制时重选目标要用）。 */
+  目标规格?: import('./types.js').TargetSpec[];
+  /** 伤害替代：玩家选择的 616.1 首选效应键。 */
+  伤害替代序?: string[];
   待选择?:
   /**
    * **只是给玩家看**（不是规定动作、也不产生选择）：把这几张牌挂到面板的「查看」入口。
@@ -352,8 +422,8 @@ export interface StackItem {
           /** 701.17b：非公开区域可以「未搜寻到」（即使里面有符合条件的牌） */
           可放弃: boolean;
           /** 701.17a：候选是**该区域里的全部牌**（要能检视），只有符合条件的才 可选 */
-          候选: { uid: number; 名称: string }[];      // ⚠ **要选什么就发什么** ✓（不再有"看得见但点不动"的候选 ✗）
-          查看?: { uid: number; 名称: string }[];    // ← 这次让你**看**的（只读 ✓，服务器给的 ✓）
+          候选: { iid: number; 名称: string }[];      // ⚠ **要选什么就发什么** ✓（不再有"看得见但点不动"的候选 ✗）
+          查看?: { iid: number; 名称: string }[];    // ← 这次让你**看**的（只读 ✓，服务器给的 ✓）
           /** 看的是**谁**的区域、选中的牌该去哪（检视带 选 那几个字段时用；完成搜寻 读它） */
           玩家?: number;
           去处?: string;
@@ -366,9 +436,11 @@ export interface StackItem {
       | {
           类型: '选';
           /** 用哪个渲染器：物件 = 点场上/手牌；选项 = 点按钮（支付/不支付、使用/不使用…） */
-  选什么: '物件' | '选项' | '阵地' | '支付源';
+  选什么: '物件' | '选项' | '阵地' | '支付源' | '攻击对象';
   /** 「这一步是“你可以…”」的通用门（执行一步 开头那道门）—— 用**标记**判，不靠标签文字 */
   门?: boolean;
+  /** 操作级可选、且操作没有内部选择：执行/取消确认。 */
+  可选确认?: boolean;
           标签: string; 玩家: number;
 
           /** 「键」是任意标识：物件是 uid，选项是 '接受' 这类字符串 */
@@ -395,10 +467,7 @@ export interface StackItem {
         }
       
       ;
-  /** 触发式能力已在结算时决定「不做」 */
-  declined?: boolean;
-  /** 「你可以……」是否已经问过操控者 */
-  decided?: boolean;
+
   /** 触发事件量（例如「受到伤害」的伤害值） */
   触发量?: number;
 }
@@ -409,12 +478,16 @@ export interface TempEffect {
   时间印记?: number;
   种类: '加成';
   target: Obj;
+  /** 400.7：创建时的实例；换区域后失效 */
+  targetIid?: number;
   武力: number;
   体力上限: number;
   expires: '直到回合结束';
 }
 
 export interface GameState {
+  /** 707/「直到来源离场」：放逐区中的牌 + 让其返回的来源实例。 */
+  放逐直到?: { 来源iid: number; 卡iid: number }[];
   /**
    * **一次性的临时减费**（034 灵机一动「本回合打出的下一个锦囊/阵略/战器减少{3}」）：
    * 打出符合筛选的第一张牌时消耗掉；回合结束时清空。
@@ -433,7 +506,7 @@ export interface GameState {
   players: PlayerState[];
   active: number;
   /**
-   * ⚠ **堆叠也是"特征输入"** ✓ —— 条件里的 `本回合发生过`（`engine.ts` 的 `找物` ✓）会查它：
+   * ⚠ **堆叠也是"特征输入"** ✓ —— 条件里的 `历史`（`engine.ts` 的 `找物` ✓）会查它：
    *   刚打出的牌就躺在堆叠上 ✓（065【天监智囊】那个"每张锦囊都 −2"的 bug 正是漏了这里 ✗）。
    * 所以它同样 `readonly` + 只走 mutator（`堆叠加/堆叠弹出/堆叠取第` ✓，内部盖章 ✓）。
    */
@@ -469,9 +542,11 @@ export interface GameState {
      *   ⚠ 触发时能力**不在堆叠上**，所以只能按这个指认，不能用 StackItem.id。
      */
     id?: number;
-    来源: Obj; abilityIndex: number; 标签: string; 触发量?: number;
-    /** 触发这件事的那个受方（玩家号或物件）——「该玩家」/「该单位」靠它 */
-    触发受方?: number | Obj;
+    来源: Obj; abilityIndex: number; 标签: string;
+    /** 触发事件上下文（受方/数量/死者位置/事件来源） */
+    事件?: 触发事件;
+    /** 触发源在触发时的 LKI */
+    来源快照?: LKI;
     /** 关键词合成出来的触发式能力（702.12 突击 / 702.13 迎击 / 702.37 重整…） */
     能力?: import('./types.js').TriggeredAbility;
     /**
@@ -480,13 +555,6 @@ export interface GameState {
      * 但按 603 它的触发式能力仍要结算（用最后已知信息）。
      */
     允许离场?: boolean;
-    /**
-     * 700.4：「死去」发生时它**原来占的阵地**。
-     *   ⚠ 不能事后读那个单位 —— 进墓地时 从当前区域摘除 已经把 o.阵地 清成 null 了。
-     *   134 黄巾传道者「放在**前者原先的位置**」要用它。
-     */
-    死者位置?: 阵地 | null;
-    /** 预先定好的目标（不入玩家的选择流程） */
     预选?: { 目标: (Obj | number)[]; 目标槽: Record<string, Obj | number> };
   }[];
   readonly tempEffects: readonly TempEffect[];
@@ -495,6 +563,7 @@ export interface GameState {
   turn: number;
   log: string[];
   nextUid: number;
+  nextIid: number;
   nextStackId: number;
   /** 待触发的 id 计数器（603.3b 排序用） */
   nextPendingId: number;
@@ -510,11 +579,13 @@ export interface GameState {
   /** 400：放逐区由所有玩家共享 */
   放逐区: Obj[];
   /** 701.25a：判定展示期间是**公开**的 —— 所有座位都能看到这张牌 */
-  判定中?: { uid: number } | null;
+  判定中?: { iid: number } | null;
   /** 506-510：当前战斗的**进攻单位**（「目标进攻单位」筛选 / 060 用）；非战斗时为 null */
   当前进攻者?: Obj | null;
-  /** 「本回合中，你可以打出该牌」的许可（045 诸葛亮）—— 回合号 + uid */
-  本回合可打出?: { uid: number; 回合: number }[];
+  /** 「本回合中，你可以打出该牌」的许可（045 诸葛亮）—— 回合号 + 实例 iid */
+  本回合可打出?: { iid: number; 回合: number }[];
+  /** 508.2d/508.2f：本回合不能再次发起战斗的单位（按当前 iid 记，回合号防跨回合）。 */
+  本回合不能发起战斗?: { iid: number; 回合: number }[];
   /**
    * **401/402 的可见性登记**：隐藏区（牌库 / 手牌）的牌默认谁都看不见；
    * 「检视」把某张牌登记给某个玩家看 —— **这是唯一记录「谁知道什么」的地方**。
@@ -524,7 +595,7 @@ export interface GameState {
    * ⚠ 以前 103.6 有一套专门的 开局.顶牌 字段 + 服务端专用闭包 + 客户端专用渲染，
    *   每加一个检视效果就得再写一遍可见性判断，漏一处就是信息泄露。
    */
-  可见登记: readonly { 玩家: number; uid: number }[];
+  可见登记: readonly { 玩家: number; iid: number }[];
   /**
    * **引擎级的待问** —— 「问玩家」不该是堆叠项的属性（`item.待选择` 只有结算生成器能用，
    *   于是**同步**的状态检查（704.5i 之类）问不了人，只能写死「留第一个」）。
@@ -536,10 +607,10 @@ export interface GameState {
     玩家: number;
     类型: '选';
     标签: string;
-    /** 候选：`.键` 是 uid（客户端按它点选），`名称` 只用来显示 */
+    /** 候选：`.键` 是实例 iid（客户端按它点选），`名称` 只用来显示 */
     候选: { 键: number; 名称?: string }[];
     数量: { 最小: number; 最大: number };
-    /** 玩家的回答（uid 列表）—— 由外层协程写进来 */
+    /** 玩家的回答（iid 列表）—— 由外层协程写进来 */
     回答?: number[];
   };
   /** 103.1：先手玩家（默认 0） */
@@ -549,7 +620,7 @@ export interface GameState {
   /** 洗牌用的随机源（不参与序列化） */
   随机源: () => number;
   /**
-   * **事件记录** —— 「过去发生过什么」。历史条件（Selector.历史）查这里。
+   * **事件记录** —— 「过去发生过什么」。历史查询（Selector.历史）查这里。
    *
    * ⚠ **这是个简版**：够现在用，**遇到更复杂的情况再拓展**（见 docs/02）。
    *   已知要拓展的方向：复合事件、事件之间的关系、非伤害类事件的数量、
@@ -594,8 +665,8 @@ export function 写区域(g: GameState, o: Obj, 区域: Obj['区域']): void { �
 export function 写操控者(g: GameState, o: Obj, p: number): void { 写(o).操控者 = p; 盖章(g); }
 export function 写整备(g: GameState, o: Obj, 值: boolean): void { 写(o).sick = 值; 盖章(g); }
 export function 写伤害(g: GameState, o: Obj, 值: number): void { 写(o).damage = 值; 盖章(g); }
-export function 写附属在(g: GameState, o: Obj, uid: number | undefined): void { 写(o).附属在 = uid; 盖章(g); }
-export function 写佩带在(g: GameState, o: Obj, uid: number | undefined): void { 写(o).佩带在 = uid; 盖章(g); }
+export function 写附属在(g: GameState, o: Obj, iid: number | undefined): void { 写(o).附属在 = iid; 盖章(g); }
+export function 写佩带在(g: GameState, o: Obj, iid: number | undefined): void { 写(o).佩带在 = iid; 盖章(g); }
 export function 写时间印记(g: GameState, o: Obj, n: number): void { 写(o).时间印记 = n; 盖章(g); }
 
 // ── 标记（数组只读 ✓ → 增删改都走这里 ✓）────────────────────
@@ -618,6 +689,8 @@ export function 改标记数量(g: GameState, 标记: { 数量: number }, 数量
 
 // ── 记忆（Record → 编译器抓不到 key 写入 ✗ → 走这里 ✓）────────
 export function 写记忆(g: GameState, o: Obj, 键: string, 值: unknown): void { 写(o).记忆[键] = 值; 盖章(g); }
+export function 写复制(g: GameState, o: Obj, 值: 复制标记 | undefined): void { 写(o).复制 = 值; 盖章(g); }
+export function 写def(g: GameState, o: Obj, def: CardDef): void { 写(o).def = def; 盖章(g); }
 export function 清记忆(g: GameState, o: Obj): void { 写(o).记忆 = {}; 盖章(g); }
 
 // ── 战场 / 效应表 / 事件记录 ──────────────────────────────────
@@ -635,7 +708,7 @@ export function 加事件记录(g: GameState, e: GameState['事件记录'][numbe
 export function 写事件记录(g: GameState, 表: readonly GameState['事件记录'][number][]): void {
   写(g).事件记录 = 表 as GameState['事件记录'][number][]; 盖章(g);
 }
-// ── 堆叠（条件里的 `本回合发生过` 会读它 → 变了也要盖章 ✓）──────
+// ── 堆叠（条件里的 `历史` 会读它 → 变了也要盖章 ✓）──────
 export function 堆叠加(g: GameState, item: StackItem): void { 表(g.stack).push(item); 盖章(g); }
 export function 堆叠弹出(g: GameState): StackItem | undefined { const x = 表(g.stack).pop(); 盖章(g); return x; }
 export function 堆叠取第(g: GameState, i: number): StackItem | undefined {
@@ -652,12 +725,12 @@ export function 堆叠取第(g: GameState, i: number): StackItem | undefined {
 export function 清检视(g: GameState, 玩家?: number): void {
   写(g).可见登记 = (玩家 === undefined
     ? []
-    : g.可见登记.filter((x) => x.玩家 !== 玩家)) as { 玩家: number; uid: number }[];
+    : g.可见登记.filter((x) => x.玩家 !== 玩家)) as { 玩家: number; iid: number }[];
   盖章(g);
 }
-export function 登记检视表(g: GameState, 玩家: number, uid: number): void {
-  if (!g.可见登记.some((x) => x.玩家 === 玩家 && x.uid === uid)) {
-    表(g.可见登记).push({ 玩家, uid });
+export function 登记检视表(g: GameState, 玩家: number, iid: number): void {
+  if (!g.可见登记.some((x) => x.玩家 === 玩家 && x.iid === iid)) {
+    表(g.可见登记).push({ 玩家, iid });
     盖章(g);
   }
 }
@@ -690,7 +763,7 @@ export function 势力支持度(g: GameState, p: number): SupportMap {
 
 export function 造对象(g: GameState, def: CardDef, owner: number, 区域: Zone): Obj {
   return {
-    uid: g.nextUid++, def, owner, 操控者: owner, 区域,
+    uid: g.nextUid++, iid: g.nextIid++, def, owner, 操控者: owner, 区域,
     tapped: false, 面: '明置', damage: 0, 阵地: null, sick: false, 记忆: {},
     时间印记: g.nextStamp++, 标记: [],
   };

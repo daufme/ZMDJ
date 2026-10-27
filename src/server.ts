@@ -11,20 +11,22 @@
  * 客户端全程使用相对地址（/api/...），所以换地址不用改客户端。
  */
 import http from 'node:http';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { GameState, Obj } from './engine/state.js';
-import { 势力支持度 } from './engine/state.js';
+import type { GameState, Obj, StackItem } from './engine/state.js';
+import { 有效势力支持度 } from './engine/engine.js';
 import { 阵地顺序, type 阵地 } from './engine/types.js';
 import {
   新对局, 整局G, type 请求, type Action, type 目标, type 攻击对象,
 } from './engine/engine.js';
 import { 列出合法动作 } from './engine/options.js';
-import { 解析动作, type 线动作 } from './engine/解析动作.js';
-import { 可用启动式能力, 有效能力列表, 处于通常时机, 实际打出费用, 有效特征, 是类别, 决定先手, 自动宣告, 记录, 可支付来源, 候选目标, 取实体 } from './engine/engine.js';
+import { 解析动作, 找任意区域物件, type 线动作 } from './engine/解析动作.js';
+import { 可用启动式能力, 有效能力列表, 处于通常时机, 实际打出费用, 有效特征, 是类别, 决定先手, 自动宣告, 记录, 可支付来源, 候选目标, 取实体, 开始打出, 取消打出 } from './engine/engine.js';
 import { 有效控制器 } from './engine/continuous.js';
-import { 默认牌组, 缺牌替代 } from './data/decks.js';   // 初阵甲/初阵乙 只在 decks.ts 里当素材，服务端只用默认牌组
+import { 默认牌组, 缺牌替代 } from './data/decks.js';
+import { 指示物全部 } from './data/指示物.js';   // 初阵甲/初阵乙 只在 decks.ts 里当素材，服务端只用默认牌组
 import { 系列配置 } from './data/系列配置.js';
 import { 卡号, 卡图 } from './engine/types.js';
 import type {CardDef} from './engine/types.js';
@@ -82,6 +84,8 @@ interface 房间 {
   号: string;
   甲: CardDef[]; 乙: CardDef[];
   g: GameState;
+  /** 601.1a：已经进堆叠、还在选模式/目标/费用的打出。 */
+  待完成打出?: { id: number; item: StackItem; 玩家: number; 需求: 需求 };
   it: Generator<请求, void, Action | null>;
   当前: 请求 | null;
   AI代理: [boolean, boolean];
@@ -98,6 +102,8 @@ interface 房间 {
   入座: [座位 | null, 座位 | null];
   /** 热座房间：私人调试用，不出现在房间列表，也不接受第二个人 */
   热座?: boolean;
+  /** 仅热座/单人调试：本房间自己的 jsonl / log 文件；联机房为空 */
+  日志?: 房间日志;
   创建时间: number;
   /** 已经开过局（决定过先手）—— 中途离座会让这局作废，不能再让人接手 */
   已开始: boolean;
@@ -162,7 +168,7 @@ function 取房间(号?: string, 选项?: { 热座?: boolean }): 房间 {
     //   第一次广播**把这间热座房泄露给大厅** ✓ → 界面上"显示一会儿再消失" ✓（2026-10 报的 ✓）。
     热座: 选项?.热座 === true ? true : undefined,
     g: null!, it: null!, 当前: null,
-    AI代理: [false, false], AI速度: 800, 无限制组牌: false, 准备: [false, false], 入座: [null, null], 创建时间: Date.now(),
+    AI代理: [false, false], AI速度: 300, 无限制组牌: false, 准备: [false, false], 入座: [null, null], 创建时间: Date.now(),
     已开始: false, 废弃: false, 最后活动: Date.now(),
   };
   房间表.set(房.号, 房);
@@ -196,6 +202,7 @@ function 视图座位(座: { 座位: number } | null): number | null {
 function 找座位(令牌: unknown): { 房: 房间; 座位: number } | null {
   const t = typeof 令牌 === 'string' ? 令牌 : '';
   const 记 = t ? (令牌表.get(t) ?? null) : null;
+  当前记录房 = 记?.房 ?? null;
   // 心跳：任何带令牌的请求都算「这个人还在」（客户端 1.2 秒轮询一次 /api/state）
   if (记) {
     const 座 = 记.房.入座.find((s) => s?.令牌 === t);
@@ -268,6 +275,7 @@ function 池视图(房?: 房间) {
       文字: c.现行文字,
       // 卡图：组牌界面要显示牌面（有卡图才给，没有的下发 null，界面用空白斜纹底）
       图: 有卡图(c) ? 卡图(c) : null,
+      缩略图: 有卡图(c) ? 卡图(c).replace(/\.jpg$/i, '.thumb.webp') : null,
       // 组牌筛选要用的几个维度（客户端不必自己从别处推）
       超类别: c.超类别 ?? [],
       需求: c.势力需求?.符号 ?? {},
@@ -285,6 +293,10 @@ function 池视图(房?: 房间) {
  * ⚠ 必须带「座位」—— 视图是按座位生成的（对手手牌是隐藏的），推给两边的内容不一样。
  */
 const 推送表 = new Set<{ res: import('http').ServerResponse; 房: 房间 | null; 座位: number | null;
+  /** 写一段 SSE 文本（未压缩就直接写；压缩就写进 gzip 流） */
+  写: (文本: string) => void;
+  /** 已经推给这个连接的日志绝对行号（只推增量） */
+  日志到: number;
   /** 连接时用的令牌 —— 「这个座位在不在场」靠它匹配（在线() 用它，见那里） */
   令牌: string | null }>();
 // 房 = null 表示**大厅订阅**（还没入座的人）—— 他们只关心房间列表。
@@ -293,7 +305,16 @@ const 推送表 = new Set<{ res: import('http').ServerResponse; 房: 房间 | nu
 const 上次推送 = new WeakMap<房间, string>();
 
 /** 把最新状态推给这个房间里所有在听的人（各自按自己的座位生成视图） */
-function 推送(房: 房间): void {
+/** 60ms 合并：一帧内多次改房 / AI 连续动作只序列化、推送最后一次 */
+const 待推 = new WeakMap<房间, ReturnType<typeof setTimeout>>();
+function 推送(房: 房间, 强制 = false): void {
+  if (!推送表.size) return;
+  if (强制) { 立即推送(房, true); return; }
+  if (待推.has(房)) return;
+  待推.set(房, setTimeout(() => { 待推.delete(房); 立即推送(房); }, 60));
+}
+
+function 立即推送(房: 房间, 强制 = false): void {
   if (!推送表.size) return;
   // 指纹只需要回答「有没有变」—— 用几个一变就动的计数拼一个，别再整份 `JSON.stringify(视图)`：
   //   那是 O(状态)，且随日志变长越来越贵；而推送很频繁（每个动作、AI 每步都要过这里）。
@@ -303,13 +324,15 @@ function 推送(房: 房间): void {
     gp.map((x) => x.体力 + ':' + x.hand.length + ':' + x.library.length + ':' + x.graveyard.length).join(','),
     gp.map((x) => Object.values(x.阵地).filter(Boolean).length).join(','),
   ].join('|');
-  if (上次推送.get(房) === 指纹) return;
+  if (!强制 && 上次推送.get(房) === 指纹) return;
   上次推送.set(房, 指纹);
-  const 按座 = new Map<number | null, string>();
+  const 按座 = new Map<string, string>();
   for (const c of [...推送表]) {
     if (c.房 !== 房) continue;
-    if (!按座.has(c.座位)) 按座.set(c.座位, JSON.stringify(视图(房, c.座位)));
-    try { c.res.write('data: ' + 按座.get(c.座位) + '\n\n'); } catch { 推送表.delete(c); }
+    const 键 = String(c.座位) + '|' + c.日志到;
+    if (!按座.has(键)) 按座.set(键, JSON.stringify(视图(房, c.座位, c.日志到)));
+    try { c.写('data: ' + 按座.get(键) + '\n\n'); } catch { 推送表.delete(c); continue; }
+    c.日志到 = 房.g.log.length;
   }
 }
 
@@ -333,25 +356,48 @@ function 推送(房: 房间): void {
  *  用法：grep 请求号 / grep "慢":true / grep 类:"收" 就能把一次交互的全过程串起来 ✓。
  *  路径：环境变量 ZMDJ_DATA_LOG，默认 `对局数据.jsonl`（追加 ✓）。
  */
-const 对局信息路径 = process.env.ZMDJ_DATA_LOG ?? '对局信息.jsonl';
-let 数据出口 = (() => { try { return fs.openSync(对局信息路径, 'a'); } catch { return null; } })();
-/** 新局时**覆盖**对局信息（测试阶段就一个文件 ✓）—— 同时写一行新局标记 ✓ */
-function 对局信息重开(房间号: string): void {
-  try { if (数据出口 !== null) fs.closeSync(数据出口); } catch {}
-  try { fs.writeFileSync(对局信息路径, ''); } catch {}
-  数据出口 = (() => { try { return fs.openSync(对局信息路径, 'a'); } catch { return null; } })();
-  事件序号 = 0; 当前段 = 0;   // 新一局：编号从 1 重新开始 ✓
-  写记录({ 类: '新局', 房间: 房间号 });
-  写记录({ 类: '标记', 人读: '──── 新局 ' + 房间号 + ' ' + new Date().toLocaleString() + ' ────' });
+/** ── 记录文件（只给**热座/单人调试**用；联机不写文件，位置预留）──────────
+ *  目录：项目根目录 `记录/`；每间房两个文件：
+ *    `记录/<房间号>.jsonl`  —— 通信/对局数据
+ *    `记录/<房间号>.log`    —— 给人看的日志
+ *  联机房 `房.日志` 为空：写记录直接跳过。以后要开联机记录，打开 `打开房间日志` 的热座判断即可。
+ */
+const 记录根目录 = path.join(process.cwd(), '记录');
+interface 房间日志 { 数据: number | null; 人读: number | null; 数据路径: string; 人读路径: string }
+let 当前记录房: 房间 | null = null;
+/** 只给热座房开文件；联机房不开（预留：以后把 if (!房.热座) return 去掉即可） */
+function 打开房间日志(房: 房间): void {
+  if (!房.热座 || 房.日志) return;
+  try {
+    fs.mkdirSync(记录根目录, { recursive: true });
+    const 数据路径 = path.join(记录根目录, 房.号 + '.jsonl');
+    const 人读路径 = path.join(记录根目录, 房.号 + '.log');
+    房.日志 = {
+      数据: (() => { try { return fs.openSync(数据路径, 'a'); } catch { return null; } })(),
+      人读: (() => { try { return fs.openSync(人读路径, 'a'); } catch { return null; } })(),
+      数据路径, 人读路径,
+    };
+  } catch { /* 记录不上不影响对局 */ }
 }
-/** 给人看的那一份：`<编号>  <用时>ms  <客户端日志那一行>` ✓ ——
- *  你在客户端看到某一行 → 在 服务器.log 里 grep 它 → 拿到编号 → 用编号去 对局信息.jsonl 查通信 ✓ */
-// 格式：`<通信编号>  <用时>ms  <客户端日志那一行>` ✓
-//   编号 = **那条收信**的编号 ✓（对局信息.jsonl 里同一个编号下就是这次交互的通信 ✓）
-const 人读出口 = (() => { try { return fs.openSync(process.env.ZMDJ_TEXT_LOG ?? '服务器.log', 'a'); } catch { return null; } })();
-function 记人读日志(行: string): void {
-  if (人读出口 === null) return;
-  try { fs.writeSync(人读出口, 行 + '\n'); } catch {}
+function 关闭房间日志(房: 房间): void {
+  const 日 = 房.日志; if (!日) return;
+  try { if (日.数据 !== null) fs.closeSync(日.数据); } catch {}
+  try { if (日.人读 !== null) fs.closeSync(日.人读); } catch {}
+  房.日志 = undefined;
+}
+/** 新局时**覆盖这个房间自己的文件**（联机没有文件 → 什么也不做） */
+function 对局信息重开(房: 房间): void {
+  const 日 = 房.日志; if (!日) return;
+  try { if (日.数据 !== null) fs.closeSync(日.数据); } catch {}
+  try { if (日.人读 !== null) fs.closeSync(日.人读); } catch {}
+  try { fs.writeFileSync(日.数据路径, ''); } catch {}
+  try { fs.writeFileSync(日.人读路径, ''); } catch {}
+  日.数据 = (() => { try { return fs.openSync(日.数据路径, 'a'); } catch { return null; } })();
+  日.人读 = (() => { try { return fs.openSync(日.人读路径, 'a'); } catch { return null; } })();
+  事件序号 = 0; 当前段 = 0;   // 新一局：编号从 1 重新开始 ✓
+  当前记录房 = 房;
+  写记录({ 类: '新局', 房间: 房.号 });
+  写记录({ 类: '标记', 人读: '──── 新局 ' + 房.号 + ' ' + new Date().toLocaleString() + ' ────' });
 }
 let 事件序号 = 0;
 let 当前请求号 = 0;
@@ -369,12 +415,13 @@ function 写记录(事件: { 类: string; 人读?: string; [k: string]: unknown 
   const { 人读, ...其余 } = 事件;
   const 号 = 当前段 || ++事件序号;              // ← **编号在这里迭代** ✓
   if (当前段 === 0) 当前段 = 号;
-  if (数据出口 !== null) {
-    try { fs.writeSync(数据出口, JSON.stringify({ 时间: new Date().toISOString(), 编号: 号, ...其余 }) + '\n'); } catch { /* 记不上不影响对局 */ }
+  const 日 = 当前记录房?.日志;
+  if (日?.数据 != null) {
+    try { fs.writeSync(日.数据, JSON.stringify({ 时间: new Date().toISOString(), 编号: 号, 房间: 当前记录房!.号, ...其余 }) + '\n'); } catch { /* 记不上不影响对局 */ }
   }
-  if (人读 !== undefined && 人读出口 !== null) {
+  if (人读 !== undefined && 日?.人读 != null) {
     const 用时 = 其余['用时'] ?? 其余['毫秒'];
-    try { fs.writeSync(人读出口, String(号).padStart(6) + '  ' + String(用时 === undefined ? '-' : 用时 + 'ms').padStart(6) + '  ' + 人读 + '\n'); } catch {}
+    try { fs.writeSync(日.人读, String(号).padStart(6) + '  ' + String(用时 === undefined ? '-' : 用时 + 'ms').padStart(6) + '  ' + 人读 + '\n'); } catch {}
   }
 }
 const 慢阈值毫秒 = Number(process.env.ZMDJ_SLOW_MS ?? 120);
@@ -390,6 +437,7 @@ function 计时<T>(标签: string, fn: () => T): T {
 }
 
 function 改房<T>(房: 房间, fn: () => T): T {
+  const 旧记录房 = 当前记录房; 当前记录房 = 房;
   try {
     const 结果 = 计时('改房', fn);   // 量这一改：推进/算候选/序列化全在里面 ✓
     // ⚠ 打**新增**的对局日志 —— 必须在 return **之前**！
@@ -408,6 +456,7 @@ function 改房<T>(房: 房间, fn: () => T): T {
     }
     return 结果;
   } finally {
+    当前记录房 = 旧记录房;
     推送(房);
   排AI(房);
   }
@@ -511,28 +560,49 @@ function 卡(房: 房间, o: Obj, 牌面可见 = false) {
   const f = 有效特征(房.g, o);
   const 暗 = o.面 === '暗置';
   const 露 = 暗 && 牌面可见;                       // 有权限：把这张牌的真牌面发出去 ✓
+  const 公开 = !暗 || 露;                          // 暗置且无权限：连卡号都不能发（会泄露真身）
   return {
-    uid: o.uid,
+    iid: o.iid,
+    cardId: o.uid,
+    // 静态卡面（文字/费用/图/印制值）不再每帧发：客户端用 /api/cards 的卡表补齐。
+    //   暗置且无权限时不发卡号，客户端也就补不出真身。
+    ...(公开 ? { 卡号: 卡号(o.def) } : {}),
     名称: f.名称,   // 709.2a：暗置 = 「暗置领土」✓（f = 有效特征；谁都不该看到原牌名 ✗）
     类别: f.类别, 副类别: f.副类别, 超类别: f.超类别,
     武力: 是类别(房.g, o, '单位') ? f.武力 : null,
     体力上限: 是类别(房.g, o, '单位') ? f.体力上限 : null,
-    // 印制值：卡面上印的数字。客户端拿它跟有效值相减，显示成「1+1/2+1」
-    印制武力: typeof o.def.武力 === 'number' ? o.def.武力 : null,
-    印制体力上限: typeof o.def.体力上限 === 'number' ? o.def.体力上限 : null,
     已受伤: o.damage,
     横置: o.tapped, 面: o.面, 整备: o.sick,
     关键词: f.关键词,
-    图: (暗 && !露) || !有卡图(o.def) ? null : 卡图(o.def),
-    文字: 暗 && !露 ? '（暗置：没有规则描述）' : o.def.现行文字,
-    费用: o.def.打出费用,
-    势力需求: o.def.势力需求.符号,
     势力: f.势力,
     拥有者: o.owner, 操控者: o.操控者,
     是单位: 是类别(房.g, o, '单位'),
-    支持: 暗 ? null : (o.def.势力支持 ?? null),
     标记: o.标记.map((m) => m.类型 + '×' + m.数量),
+    // 暗置无权限：只给占位文字/空图，避免客户端从卡表补出真牌面。
+    // 暗置不带印制势力支持（拆静态字段时漏了，客户端会从卡表补出来）。
+    ...(暗 ? { 支持: null } : {}),
+    ...(暗 && !露 ? { 文字: '（暗置：没有规则描述）', 图: null } : {}),
   };
+}
+
+/**
+ * **静态卡面表**：客户端一次性拉走并缓存；对局状态只发 卡号 + 动态字段。
+ * 暗置牌的状态里不带卡号，所以不会从这张表补出真身。
+ */
+function 卡面表() {
+  const 表: Record<string, unknown> = {};
+  for (const c of [...卡池, ...指示物全部]) {
+    if (表[卡号(c)]) continue;
+    表[卡号(c)] = {
+      名称: c.全名, 文字: c.现行文字, 费用: c.打出费用,
+      势力需求: c.势力需求?.符号 ?? {}, 支持: c.势力支持 ?? null,
+      图: 有卡图(c) ? 卡图(c) : null,
+      缩略图: 有卡图(c) ? 卡图(c).replace(/\.jpg$/i, '.thumb.webp') : null,
+      印制武力: typeof c.武力 === 'number' ? c.武力 : null,
+      印制体力上限: typeof c.体力上限 === 'number' ? c.体力上限 : null,
+    };
+  }
+  return 表;
 }
 
 /**
@@ -543,8 +613,8 @@ function 卡(房: 房间, o: Obj, 牌面可见 = false) {
  *   所以效果必须是**独立的一票** ✓；区域只是"**默认层**"的一个输入 ✓。
  * 判定顺序（以后要加"效果禁止"就插最前面 ✓）：**禁止 > 授予 > 默认** ✓。
  */
-function 效果授予了(房: 房间, 座位: number, uid: number): boolean {
-  return 房.g.可见登记.some((x) => x.玩家 === 座位 && x.uid === uid);
+function 效果授予了(房: 房间, 座位: number, iid: number): boolean {
+  return 房.g.可见登记.some((x) => x.玩家 === 座位 && x.iid === iid);
 }
 /** 规则默认：只回答"**没有效果时**，规则本身允许谁看" ✓ */
 function 默认可见(房: 房间, o: Obj, 座位: number): boolean {
@@ -560,7 +630,7 @@ function 默认可见(房: 房间, o: Obj, 座位: number): boolean {
  *  （导出是给回归探针用 ✓ —— `_探可见.mjs` ✓；它只读 `房.g` ✓，喂个 `{g}` 就能量 ✓） */
 export function 可见(房: 房间, o: Obj, 座位: number | null): boolean {
   if (座位 === null) return true;                    // 热座 / 上帝视角 ✓
-  if (效果授予了(房, 座位, o.uid)) return true;       // ★ 效果说的算，与区域无关 ✓
+  if (效果授予了(房, 座位, o.iid)) return true;       // ★ 效果说的算，与区域无关 ✓
   return 默认可见(房, o, 座位);
 }
 /**
@@ -582,15 +652,15 @@ function 在哪(房: 房间, uid: number):
   for (const p of 房.g.players) {
     const 表: ['手牌' | '牌库' | '墓地', Obj[]][] = [['手牌', p.hand], ['牌库', p.library], ['墓地', p.graveyard]];
     for (const [区, 列] of 表) {
-      const o = 列.find((x) => x.uid === uid);
+      const o = 列.find((x) => x.iid === uid);
       if (o) return { 区, 物件: o };
     }
   }
-  const 战 = 房.g.战场.find((x) => x.uid === uid);
+  const 战 = 房.g.战场.find((x) => x.iid === uid);
   if (战) return { 区: '战场', 物件: 战 };
-  const 逐 = 房.g.放逐区.find((x) => x.uid === uid);
+  const 逐 = 房.g.放逐区.find((x) => x.iid === uid);
   if (逐) return { 区: '放逐区', 物件: 逐 };
-  const 堆 = 房.g.stack.map((s) => s.card).find((x): x is Obj => !!x && x.uid === uid);
+  const 堆 = 房.g.stack.map((s) => s.card).find((x): x is Obj => !!x && x.iid === uid);
   if (堆) return { 区: '堆叠', 物件: 堆 };
   /**
    * ⚠ **暂存位**（`搜寻` / 检出来的牌先放这儿 ✓）—— 它是**每个堆叠物件各自**的字段（`item.暂存` ✓），
@@ -602,7 +672,7 @@ function 在哪(房: 房间, uid: number):
   const 持有: (Obj[] | undefined)[] = 房.g.stack.map((s) => (s as unknown as { 暂存?: Obj[] }).暂存);
   持有.push((房.it as unknown as { 暂存?: Obj[] } | null)?.暂存);
   for (const 列 of 持有) {
-    const 暂 = 列?.find((x) => x.uid === uid);
+    const 暂 = 列?.find((x) => x.iid === uid);
     if (暂) return { 区: '牌库', 物件: 暂 };      // ← 报它来的区域 ✓（暂存不是"区域" ✓ 不该自成一组 ✓）
   }
   return undefined;
@@ -610,7 +680,7 @@ function 在哪(房: 房间, uid: number):
 
 /** 物件在哪个区域（界面按它分组 ✓） */
 function 区of(房: 房间, o: Obj): '手牌' | '牌库' | '墓地' | '战场' | '放逐区' | '堆叠' | undefined {
-  return 在哪(房, o.uid)?.区;
+  return 在哪(房, o.iid)?.区;
 }
 
 /** uid → 物件（找遍所有持有处 ✓） */
@@ -660,7 +730,7 @@ function 挂牌面(房: 房间, 需: 需求 | null, 座位: number | null): 需�
  * `看得见(i)` 决定这一份里包含哪些人的隐藏信息（手牌之类）——
  * ⚠ 这是**唯一**该做可见性判断的地方，别在别处再散一份。
  */
-function 视图(房: 房间, 座位: number | null = null) {
+function 视图(房: 房间, 座位: number | null = null, 从日志?: number) {
   // ⚠ **暗置牌的「真身」只发给有效操控者** ✓（规则：「可以看自己操控的暗置牌是什么」）——
   //   判据只有这一处 ✓：漏一处是信息泄露 ✗，重复一处是规则不一致 ✗。
   // ⚠ 取牌一律问**唯一那处**可见性判断 ✓（暗置归操控者 ✓、效果授予 ✓、公开区 ✓ 全在里面 ✓）
@@ -672,6 +742,8 @@ function 视图(房: 房间, 座位: number | null = null) {
     人齐: 人齐了(房), 废弃: 房.废弃, 已开始: 房.已开始,
     准备: 房.准备, 都准备: 都准备好了(房), 等准备: !房.热座 && !都准备好了(房),
     热座: 座位 === null,
+    待完成打出: 房.待完成打出 ? { id: 房.待完成打出.id, 玩家: 房.待完成打出.玩家,
+      需求: 挂牌面(房, 房.待完成打出.需求, 座位) } : null,
     turn: 房.g.turn, active: 房.g.active, over: 房.g.over, winner: 房.g.winner, AI代理: 房.AI代理, AI速度: 房.AI速度,
     先手玩家: 房.g.先手玩家,
     // 103 开局：**只放开局独有的数据** —— 「进行到哪一步」「轮到谁」都在 当前请求 里，
@@ -686,7 +758,7 @@ function 视图(房: 房间, 座位: number | null = null) {
     } : null,
     players: 房.g.players.map((p) => ({
       index: p.index, 名字: p.name, 体力: p.体力, 体力上限: p.lifeMax,
-      支持: 势力支持度(房.g, p.index),
+      支持: 有效势力支持度(房.g, p.index),
       // 401/402：手牌是私有区 —— **规则只写在 `可见()` 一处** ✓：
       //   对手那张表会自然过滤成空 ✓（以后有"看手牌"的效果也能直接放行 ✓，不用再改这里 ✓）
       手牌: p.hand.filter((c) => 可见(房, c, 座位)).map((c) => 卡v(c)),
@@ -702,7 +774,7 @@ function 视图(房: 房间, 座位: number | null = null) {
       // 401 / 402：牌库是隐藏区，只给数量
       牌库张数: p.library.length,
       // 牌库**整摞**：牌库顶在前；能看的给正牌面（检视/观星 登记过的那几张），其余只给 uid（客户端画背面）
-      牌库: [...p.library].reverse().map((c) => (可见(房, c, 座位) ? 卡v(c) : { uid: c.uid })),
+      牌库: [...p.library].reverse().map((c) => (可见(房, c, 座位) ? 卡v(c) : { iid: c.iid })),
       本回合已打领土: p.landsPlayedThisTurn,
     })),
     // 400：放逐区由所有玩家共享，明置且任何人都能检视（406.3）
@@ -713,10 +785,10 @@ function 视图(房: 房间, 座位: number | null = null) {
      * 这里直接按 uid 找物件发牌面（不走可见登记：那是私密表）。
      */
     判定牌: (() => {
-      const u = 房.g.判定中?.uid;
+      const u = 房.g.判定中?.iid;
       if (u === undefined) return null;
       const o = 房.g.players.flatMap((p) => [...p.library, ...p.hand, ...p.graveyard])
-        .concat(房.g.战场).concat(房.g.放逐区).find((c) => c.uid === u);
+        .concat(房.g.战场).concat(房.g.放逐区).find((c) => c.iid === u);
       return o ? 卡v(o) : null;
     })(),
     // 401/402：隐藏区的牌只有**登记过的**玩家看得到 —— 可见性判断只在这一处。
@@ -727,7 +799,7 @@ function 视图(房: 房间, 座位: number | null = null) {
       for (const x of 房.g.可见登记) {
         if (!看得见(x.玩家)) continue;                  // 联机时只有登记的那个人拿得到
         const o = 房.g.players.flatMap((pl) => [...pl.library, ...pl.hand, ...pl.graveyard])
-          .concat(房.g.战场).concat(房.g.放逐区).find((c) => c.uid === x.uid);
+          .concat(房.g.战场).concat(房.g.放逐区).find((c) => c.iid === x.iid);
         if (o) out.push(卡v(o));
       }
       return out;
@@ -749,7 +821,7 @@ function 视图(房: 房间, 座位: number | null = null) {
         // 701.17a：要让玩家「检视该区域的所有牌」再挑 —— 所以候选要带完整卡面
         ? { ...房.当前.决定, 候选: 房.当前.决定.候选.map((c) => {
             const o = 房.g.players.flatMap((x) => [...x.library, ...x.hand, ...x.graveyard]).concat(房.g.战场)
-              .concat(房.g.放逐区).find((x) => x.uid === c.uid);
+              .concat(房.g.放逐区).find((x) => x.iid === c.iid);
             return { ...c, 卡: o ? 卡v(o) : null };
           }) }
         : 房.当前.决定,
@@ -764,6 +836,7 @@ function 视图(房: 房间, 座位: number | null = null) {
     //   ⚠ 以前整份需求发给所有座位 ✗ → 先手手里也有后手该看的牌 ✓
     //     （然后靠界面"轮不到你就不画"来藏 ✗ —— 那不成立 ✓；2026-10 报的"先手也能看到开局检视" ✓ 就是这个 ✓）。
     决定需求: (() => {
+      if (房.待完成打出) return null;
       if (!(房.当前 && 房.当前.决定)) return null;
       const 需 = 挂牌面(房, 需求_决定(房.当前.决定 as unknown as Record<string, unknown>, 房.g, 房.当前.玩家), 座位);
       if (!需) return null;
@@ -776,19 +849,21 @@ function 视图(房: 房间, 座位: number | null = null) {
      *   （那条推断以前还得分"展示要双方都动" ✓，就是补丁的来源之一 ✗）。
      */
     可操作: (() => {
+      if (房.待完成打出) return 座位 === null || 房.待完成打出.玩家 === 座位;
       if (座位 === null) return true;                                      // 热座 / 上帝视角 ✓
       if (!房.当前) return false;
       const 双方 = (房.当前.决定 as { 等双方确认?: boolean } | undefined)?.等双方确认 === true;
       if (双方) return !(双方确认.get(房) ?? []).includes(座位);            // 展示：还没确认的那一方就能动 ✓
       return 房.当前.玩家 === 座位;                                        // 其余：只有这一步的玩家 ✓
     })(),
-    合法动作: (房.当前 && !房.当前.决定)
+    合法动作: (房.当前 && !房.当前.决定 && !房.待完成打出)
       ? 合并同族动作(列出合法动作(房.g, 房.当前.玩家, 房.当前.时机)).map((a) => ({
           ...a,
-          // ⚠ 把 `可支付来源()` 的**原对象**交下去 ✓（带 `提供`）—— 收发层要靠它给「支付源」的候选配 `量` ✓
-          //   （只给 uid 的话，「要付 2 点」就退化成「要挑 2 张地」✗）。
-          需求: 挂牌面(房, 需求_动作(a as unknown as Record<string, unknown>, 房.当前!.玩家,
-            可支付来源(房.g, 房.当前!.玩家) || [], 房.g), 座位),
+          // 打出改为两段：先开始打出，再由待完成打出生成需求。这里不再挂旧的一次性打出需求。
+          ...((a.种类 === '打出' || a.种类 === '发起战斗') ? {} : {
+            需求: 挂牌面(房, 需求_动作(a as unknown as Record<string, unknown>, 房.当前!.玩家,
+              可支付来源(房.g, 房.当前!.玩家) || [], 房.g), 座位),
+          }),
         }))
       : [],
     // 118.2 / 304.8：支付数字费用时要让玩家自己挑启动哪几个费用能力（挑地）
@@ -803,14 +878,12 @@ function 视图(房: 房间, 座位: number | null = null) {
       if (!d || d.等双方确认 !== true) return null;
       return { 需要: [0, 1], 已: [...(双方确认.get(房) ?? [])] };
     })(),
-    log: 房.g.log.slice(-100),
-    /**
-     * ⚠ **日志的绝对行数** ✓ —— 客户端靠它算"这一窗的第一行是第几行" ✓。
-     *   只给 `log`（末尾 100 行）是不够的 ✗：窗口满了以后长度**恒为 100** ✓，
-     *   客户端拿"长度变没变"当"有没有新行"就会永远判成"没有" ✗
-     *   （2026-10 报的："放完单位没有 log，做别的动作才一起冒出来" ✓ 就是这个 ✓）。
-     */
-    log总数: 房.g.log.length,
+    log: (() => {
+      const 全 = 房.g.log;
+      const 起 = 从日志 === undefined ? Math.max(0, 全.length - 100) : Math.max(0, Math.min(从日志, 全.length));
+      return { 起始: 起, 行: 全.slice(起), 总数: 全.length };
+    })(),
+
   };
 }
 
@@ -820,21 +893,21 @@ const AI定时 = new WeakMap<房间, ReturnType<typeof setTimeout>>();
 
 /** AI 的一步：读视图 → 挑动作/填需求 → 走和玩家一样的 应用() */
 /** 启动能力的身份键（同一张牌的同一个能力/模式算同一条） */
-function AI能力键(a: { uid?: number; 能力索引?: number; 模式号?: number }): string {
-  return String(a.uid) + ':' + String(a.能力索引) + ':' + String(a.模式号 ?? '');
+function AI能力键(a: { iid?: number; 能力索引?: number; 模式号?: number }): string {
+  return String(a.iid) + ':' + String(a.能力索引) + ':' + String(a.模式号 ?? '');
 }
 
 /** 这条启动式的「豁免限制」是不是本回合已经生效了（再启动只会白付钱） */
-function AI重复豁免(g: GameState, seat: number, a: { uid?: number; 能力索引?: number }): boolean {
-  if (a.uid == null || a.能力索引 == null) return false;
-  const o = g.战场.find((x) => x.uid === a.uid) ?? g.放逐区.find((x) => x.uid === a.uid);
+function AI重复豁免(g: GameState, seat: number, a: { iid?: number; 能力索引?: number }): boolean {
+  if (a.iid == null || a.能力索引 == null) return false;
+  const o = g.战场.find((x) => x.iid === a.iid) ?? g.放逐区.find((x) => x.iid === a.iid);
   if (!o) return false;
   const ab = 有效能力列表(g, o)[a.能力索引] as { 效应?: { 操作?: string; 禁止?: string; 来源?: { ref?: string } }[] } | undefined;
   const 步 = ab?.效应?.find((x) => x?.操作 === '豁免限制');
   if (!步) return false;
   const 豁免 = g.players[seat]?.豁免 ?? [];
   return 豁免.some((e) => e.禁止 === 步.禁止 && e.到期 >= g.turn
-    && (步.来源?.ref === '自身' ? e.来源 === o.uid : true));
+    && (步.来源?.ref === '自身' ? e.来源 === o.iid : true));
 }
 
 function AI一步(房: 房间): void {
@@ -847,9 +920,10 @@ function AI一步(房: 房间): void {
     if (!可.length) return;
     seat = 可[0]!;
   } else if (!房.AI代理[seat]) return;
-  const 视 = 视图(房, seat) as unknown as { 决定需求?: unknown; 合法动作?: { 种类: string; 需求?: unknown }[] };
+  const 视 = 视图(房, seat) as unknown as { 决定需求?: unknown; 待完成打出?: { id: number; 需求?: unknown }; 合法动作?: { 种类: string; 需求?: unknown }[] };
   let 体: 线动作 | null = null;
-  if (视.决定需求) 体 = AI填需求(视.决定需求 as never) as unknown as 线动作;
+  if (视.待完成打出) 体 = AI填需求(视.待完成打出.需求 as never) as unknown as 线动作;
+  else if (视.决定需求) 体 = AI填需求(视.决定需求 as never) as unknown as 线动作;
   else {
       const 回合 = 房.g.turn;
       if (房.AI能力回合 !== 回合) { 房.AI本回合能力?.clear(); 房.AI能力回合 = 回合; }
@@ -866,6 +940,12 @@ function AI一步(房: 房间): void {
         if (合法.some((x) => x.种类 === '让过')) 体 = { 种类: '让过' } as unknown as 线动作;
         else return;
       } else if (动.种类 === "让过") 体 = { 种类: "让过" } as unknown as 线动作;
+      else if (动.种类 === '打出') {
+        体 = { 种类: '开始打出', iid: (动 as { iid?: number }).iid };
+      }
+      else if (动.种类 === '发起战斗') {
+        体 = { 种类: '发起战斗', iid: (动 as { iid?: number }).iid };
+      }
       else {
         体 = AI填需求(动.需求 as never, 动 as never) as unknown as 线动作;
         if (动.种类 === '启动能力') 已用.set(AI能力键(动 as never), 回合);
@@ -892,7 +972,7 @@ function 排AI(房: 房间): void {
     有 = [0, 1].some((i) => 房.AI代理[i] && !已.includes(i));
   }
   if (!有) return;
-  const 延 = Math.max(0, 房.AI速度 ?? 800);
+  const 延 = Math.max(0, 房.AI速度 ?? 300);
   AI定时.set(房, setTimeout(() => {
     AI定时.delete(房);
     if (!房.当前) return;
@@ -900,7 +980,8 @@ function 排AI(房: 房间): void {
   }, 延));
 }
 
-export function 应用(房: 房间, 体: 线动作, 座位: number | null = null): { ok: boolean; 错误?: string } {   // 导出：给离线校验脚本用s' 做单元测试
+export function 应用(房: 房间, 体: 线动作, 座位: number | null = null): { ok: boolean; 错误?: string } {
+  当前记录房 = 房;   // 导出：给离线校验脚本用s' 做单元测试
   { const t = AI定时.get(房); if (t) { clearTimeout(t); AI定时.delete(房); } }   // 人先动了 → 取消 AI
   if (!房.当前) return { ok: false, 错误: '现在不需要任何人做决定' };
   const p = 房.当前.玩家;
@@ -920,6 +1001,56 @@ export function 应用(房: 房间, 体: 线动作, 座位: number | null = null
     const 之前应用中 = 应用中; 应用中 = true;
   写记录({ 类: '收', 房间: 房.号 ?? '', 座位, 轮到: p, 体 });
   const 起 = Date.now();
+  if (体.种类 === '开始打出') {
+    if (房.待完成打出) { 应用中 = 之前应用中; return { ok: false, 错误: '已有一个待完成的打出' }; }
+    if (房.当前.决定) { 应用中 = 之前应用中; return { ok: false, 错误: '现在不是打出时机' }; }
+    const iid = Number(体.iid);
+    // 601：能不能打出由 能打出 / 合法动作决定；这里只按 iid 取实体，不限制来源区域。
+    const o = 找任意区域物件(房.g, iid);
+    if (!o) { 应用中 = 之前应用中; return { ok: false, 错误: '找不到这张牌' }; }
+    const a = 合并同族动作(列出合法动作(房.g, p, 房.当前.时机))
+      .find((x) => x.种类 === '打出' && x.iid === iid);
+    if (!a) { 应用中 = 之前应用中; return { ok: false, 错误: '这张牌现在不能打出' }; }
+    const item = 开始打出(房.g, p, o);
+    if (!item) { 应用中 = 之前应用中; return { ok: false, 错误: '不能开始打出' }; }
+    const 需0 = 需求_动作(a as unknown as Record<string, unknown>, p, 可支付来源(房.g, p) || [], 房.g);
+    if (!需0) { 取消打出(房.g, item); 应用中 = 之前应用中; return { ok: false, 错误: '无法生成打出需求' }; }
+    for (const k of Object.keys(需0.确认后发)) if (需0.确认后发[k] === '@待完成打出') 需0.确认后发[k] = item.id;
+    房.待完成打出 = { id: item.id, item, 玩家: p, 需求: 需0 };
+    记录(房.g, 房.g.players[p]!.name + ' 开始打出 ' + o.def.全名);
+    推送(房); 排AI(房); 应用中 = 之前应用中;
+    return { ok: true };
+  }
+  if (体.种类 === '取消打出') {
+    if (!房.待完成打出 || Number(体.待完成打出) !== 房.待完成打出.id) { 应用中 = 之前应用中; return { ok: false, 错误: '没有这个待完成打出' }; }
+    取消打出(房.g, 房.待完成打出.item);
+    记录(房.g, 房.g.players[p]!.name + ' 取消打出 ' + 房.待完成打出.item.标签);
+    房.待完成打出 = undefined;
+    推送(房); 排AI(房); 应用中 = 之前应用中;
+    return { ok: true };
+  }
+  if (体.种类 === '完成打出') {
+    if (!房.待完成打出 || Number(体.待完成打出) !== 房.待完成打出.id) { 应用中 = 之前应用中; return { ok: false, 错误: '没有这个待完成打出' }; }
+    const 待 = 房.待完成打出;
+    const 线: 线动作 = { 种类: '打出', iid: 待.item.card!.iid,
+      模式: 体.模式, 目标: 体.目标, 阵地: 体.阵地, 支付源: 体.支付源, 额外: 体.额外, 额外牺牲: 体.额外牺牲 };
+    const r2 = 解析动作(房.g, p, 线);
+    if (!r2.ok) { 应用中 = 之前应用中; return { ok: false, 错误: r2.错误 }; }
+    const act2 = r2.动作;
+    if (act2.种类 !== '打出') { 应用中 = 之前应用中; return { ok: false, 错误: '完成打出解析失败' }; }
+    const 完成动作: Action = { 种类: '完成打出', card: 待.item.card!, 待完成打出: 待.id,
+      目标: act2.目标, 目标槽: act2.目标槽, 阵地: act2.阵地,
+      模式号: act2.模式号, X: act2.X, 支付源: act2.支付源,
+      额外: act2.额外, 额外牺牲: act2.额外牺牲 };
+    房.待完成打出 = undefined;
+    // 完成打出必须作为动作进入执行流程，不能在这里直接改状态后推进(null)；
+    // 否则优先权会被当成“甲已经让过”（117.3c）。
+    推进(房, 完成动作);
+    排AI(房);
+    应用中 = 之前应用中;
+    return { ok: true };
+  }
+  if (体.种类 === '打出') { 应用中 = 之前应用中; return { ok: false, 错误: '打出必须先从开始打出进入堆叠' }; }
   const r = 解析动作(房.g, p, 体);
   if (!r.ok) { 写记录({ 类: '收-拒绝', 错误: r.错误, 人读: '✗ ' + (r.错误 ?? '') }); 应用中 = 之前应用中; return { ok: false, 错误: r.错误 }; }
   /**
@@ -993,8 +1124,14 @@ function 发JSON(res: http.ServerResponse, 数据: unknown, 码 = 200): void {
     新一段();   // ← **发**这一条通信 = 新的一段 ✓
     写记录({ 类: '发', 码, 字节: 体.length, 摘要: d, 变化: 变, 数据: 变 ? 数据 : undefined });
   }
-  res.writeHead(码, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(体);
+  const 接 = String(res.req?.headers['accept-encoding'] ?? '');
+  const 压 = 体.length > 512 && /gzip/.test(接);
+  const 出 = 压 ? zlib.gzipSync(Buffer.from(体)) : Buffer.from(体);
+  res.writeHead(码, {
+    'Content-Type': 'application/json; charset=utf-8',
+    ...(压 ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
+  });
+  res.end(出);
 }
 /**
  * 收一个 JSON 请求体。**解析失败一律回调 `{}`，不抛** —— 客户端发坏数据不该把服务端打挂，
@@ -1016,13 +1153,18 @@ function 发文件(res: http.ServerResponse, 相对: string, 类型: string): vo
   if (!全.startsWith(根目录)) { res.writeHead(403); res.end('forbidden'); return; }
   fs.readFile(全, (e, 数据) => {
     if (e) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('找不到 ' + 全); return; }
+    const 文本 = 类型.startsWith('text/') || 类型.includes('javascript') || 类型.includes('json') || 类型.includes('svg');
+    const 接 = String(res.req?.headers['accept-encoding'] ?? '');
+    const 压 = 文本 && 数据.length > 512 && /gzip/.test(接);
+    const 出 = 压 ? zlib.gzipSync(数据) : 数据;
     res.writeHead(200, {
       'Content-Type': 类型,
-      // ⚠ HTML 绝不能缓存：否则浏览器拿旧的 index.html 配新的服务端接口，
-      //   表现就是「按钮点了没反应」（旧 JS 调已改名的接口）。卡图可以短缓存。
-      'Cache-Control': 类型.startsWith('text/html') ? 'no-store, must-revalidate' : 'max-age=3600',
+      'Cache-Control': 类型.startsWith('text/html') ? 'no-store, must-revalidate'
+        : 类型.startsWith('image/') ? 'public, max-age=31536000, immutable'
+        : 'max-age=3600',
+      ...(压 ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
     });
-    res.end(数据);
+    res.end(出);
   });
 }
 /** 发 index.html。**每次请求都重读磁盘** —— 改前端只要刷页面，不用重启服务端 */
@@ -1062,6 +1204,7 @@ const 服务器 = http.createServer((req, res) => {
   const u = decodeURIComponent((req.url ?? '/').split('?')[0] ?? '/');
   // ★ **每一条进来的请求**先占一个通信编号 ✓（编号 = 通信条数 ✓ 顺序递增 ✓）
   //   入座 / 轮询 / 动作 都算 ✓ —— 这样「入座发牌」那些日志行也落在它自己的编号下 ✓
+  当前记录房 = null;               // 大厅/未入座请求不写房间文件
   新一段();                        // ← 每一条进来的请求 = 新的一段 ✓
   写记录({ 类: '收', 路由: u });
   if (req.method === 'GET' && (u === '/' || u === '/index.html')) return 发页面(res, 'web/index.html');
@@ -1075,13 +1218,15 @@ const 服务器 = http.createServer((req, res) => {
     const 段 = 名.split('/');
     const 合法段 = (x: string) => !!x && x.length <= 64 && x !== '.' && x !== '..' && x.indexOf(String.fromCharCode(92)) < 0;
     if (段.length < 1 || 段.length > 2 || !段.every(合法段)) { res.writeHead(400); return res.end('bad name'); }
-    return 发文件(res, 'web/cards/' + 名, /\.png$/i.test(名) ? 'image/png' : 'image/jpeg');
+    return 发文件(res, 'web/cards/' + 名, /\.png$/i.test(名) ? 'image/png' : /\.webp$/i.test(名) ? 'image/webp' : 'image/jpeg');
   }
   if (req.method === 'GET' && u === '/api/state') {
     const 令牌 = new URL(req.url ?? '/', 'http://x').searchParams.get('令牌');
     const 座 = 找座位(令牌);
     if (!座) return 发JSON(res, { 未入座: true, 我的座位: null, 入座: [null, null], 人齐: false, 热座: false, players: [] });
-    return 发JSON(res, 视图(座.房, 视图座位(座)));
+    const 从参 = new URL(req.url ?? '/', 'http://x').searchParams.get('log从');
+    const 从0 = 从参 === null ? undefined : Number(从参);
+    return 发JSON(res, 视图(座.房, 视图座位(座), 从0 !== undefined && Number.isFinite(从0) ? 从0 : undefined));
   }
   // ── SSE：服务端主动推（客户端不用再 1.2 秒轮询）────────────────
   //   端1 动作 → 服务端 → ① 返回给端1 → ② **主动推给端2**（就是这条）
@@ -1090,19 +1235,27 @@ const 服务器 = http.createServer((req, res) => {
     const 座 = 找座位(令牌);
     // ⚠ **没入座也能连** —— 那是「大厅订阅」，只用来收房间列表。
     //   不这样的话，别人建了新房间你得等轮询（现在放宽到 8 秒）才看得到。
+    const 接 = String(req.headers['accept-encoding'] ?? '');
+    const 压缩 = /gzip/.test(接) ? zlib.createGzip({ flush: zlib.constants.Z_SYNC_FLUSH }) : null;
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
+      ...(压缩 ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
     });
-    res.write(':ok\n\n');
-    const 记 = 座 ? { res, 房: 座.房, 座位: 视图座位(座), 令牌 } : { res, 房: null, 座位: null, 令牌: null };
+    if (压缩) 压缩.pipe(res);
+    const 写 = (文本: string): void => {
+      if (压缩) { 压缩.write(文本); 压缩.flush(zlib.constants.Z_SYNC_FLUSH); }
+      else res.write(文本);
+    };
+    写(':ok\n\n');
+    const 记 = 座 ? { res, 房: 座.房, 座位: 视图座位(座), 令牌, 写, 日志到: Math.max(0, 座.房.g.log.length - 100) } : { res, 房: null, 座位: null, 令牌: null, 写, 日志到: 0 };
     推送表.add(记);
-    const 心跳 = setInterval(() => { try { res.write(':ping\n\n'); } catch { /* 断了 */ } }, 20000);
-    req.on('close', () => { clearInterval(心跳); 推送表.delete(记); });
-    if (座) 推送(座.房);              // 连上就先给一次当前状态
-    else { try { res.write('data: ' + JSON.stringify(房间列表视图()) + '\n\n'); } catch { /* 断 */ } }
+    const 心跳 = setInterval(() => { try { 写(':ping\n\n'); } catch { /* 断了 */ } }, 20000);
+    req.on('close', () => { clearInterval(心跳); 推送表.delete(记); 压缩?.end(); });
+    if (座) 推送(座.房, true);         // 连上就先给一次当前状态（不能因为全局指纹没变就不给）
+    else { try { 写('data: ' + JSON.stringify(房间列表视图()) + '\n\n'); } catch { /* 断 */ } }
     return;
   }
   if (req.method === 'GET' && u === '/api/房间') {
@@ -1114,6 +1267,9 @@ const 服务器 = http.createServer((req, res) => {
       })),
     });
   }
+  if (req.method === 'GET' && u === '/api/cards') {
+    return 发JSON(res, { ok: true, 卡牌: 卡面表() });
+  }
   if (req.method === 'GET' && u === '/api/pool') {
     const 座 = 找座位(new URL(req.url ?? '/', 'http://x').searchParams.get('令牌'));
     return 发JSON(res, { ok: true, 池: 池视图(座?.房) });
@@ -1124,6 +1280,8 @@ const 服务器 = http.createServer((req, res) => {
       // ⚠ **建房那一刻就标热座** ✓ —— 否则建房里的那次 `推送大厅()` 会把这间房广播出去 ✓
       //   （表现：房间列表里出现一会儿再消失 ✗ 2026-10 报的 ✓）。
       const 房 = 取房间(undefined, { 热座: true });
+      打开房间日志(房);
+      对局信息重开(房);              // 新热座房 = 从空文件开始
       发牌并开局(房, 20250101);              // 热座一个人，建完房就当他准备好了
       const 名 = String(体.名字 ?? '').trim().slice(0, 12) || '调试者';
       const 新: 座位 = { 令牌: 'TK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase(), 名字: 名, 最后见到: Date.now() };
@@ -1197,7 +1355,7 @@ const 服务器 = http.createServer((req, res) => {
     const 座 = 找座位(体.令牌); const 房 = 座 ? 座.房 : null;
     if (!房) return 发JSON(res, { ok: false, 错误: '还没入座（没有令牌或令牌已失效）' }, 400);
     // ★ 测试阶段：**新局就覆盖对局信息** ✓（编号从 1 重新开始 ✓；服务器.log 里会有「新局」分隔行 ✓）
-    对局信息重开(房.号 ?? '');
+    对局信息重开(房);
     发牌并开局(房, Number(体.seed ?? (Date.now() % 100000)));
     房.准备 = [!!房.热座, !!房.热座];      // 联机重开要重新准备
     发JSON(res, 视图(房, 视图座位(座))); });
@@ -1267,6 +1425,7 @@ setInterval(() => {
     const 闲 = 现在 - 房.最后活动;
     const 该删 = (都空了 && 闲 > 0) || (房.废弃 && 都掉线 && 闲 > 2 * 60_000) || (都掉线 && 闲 > 10 * 60_000) || 闲 > 60 * 60_000;
     if (!该删) continue;
+    关闭房间日志(房);
     房间表.delete(号);
     for (const [t, 记] of 令牌表) if (记.房 === 房) 令牌表.delete(t);
   }

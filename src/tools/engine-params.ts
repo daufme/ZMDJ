@@ -165,7 +165,7 @@ if (process.argv.includes('--md')) {
   if (其他.length) 打操作('其他', 其他);
   行('## 常用词汇');
   行();
-  for (const 名 of ['Selector', 'TargetSpec', '筛选条件', 'Condition', 'Trigger', '费用行为', '层修改', 'ReplacementSpec', '指示物定义', '规则限制', '关键词能力']) {
+  for (const 名 of ['Selector', 'TargetSpec', '筛选条件', 'Condition', 'Trigger', '费用步', '层修改', 'ReplacementSpec', '指示物定义', '规则持续效应', '关键词能力']) {
     const d = 声明表.get(名);
     if (!d) continue;
     行('### ' + 名);
@@ -235,11 +235,11 @@ console.log('════════ 二、其余常用词汇 ═════�
 打声明('筛选条件', '筛选条件的一条');
 打声明('Condition', '条件');
 打声明('Trigger', '触发');
-打声明('费用行为', '费用行为（602.1d：「→」前的一切，按列表顺序支付）');
+打声明('费用步', '费用步（602.1d：「→」前的一切，按列表顺序支付）');
 打声明('层修改', '层修改（613）');
 打声明('ReplacementSpec', '替代/防止（614/615）');
 打声明('指示物定义', '指示物（112.3）');
-打声明('规则限制', '规则限制（604）');
+打声明('规则持续效应', '规则持续性效应（604/613.11）');
 打声明('关键词能力', '关键词能力');
 for (const 名 of ['筛选属性', '筛选比较', '阵地关系', 'CardType', 'Supertype', 'Faction', 'Zone', '事件名']) {
   const d = 声明表.get(名);
