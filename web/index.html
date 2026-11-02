@@ -17,6 +17,7 @@
     --卡高-阵地: clamp(76px, 8.6vh, 116px);    /* 阵地：比其它区域**小**（一行五个，横向最挤） */
     --卡高-区域: clamp(84px, 10.2vh, 138px);   /* 手牌/墓地/牌库/放逐区：比阵地大 */
     --卡高-堆叠: clamp(48px, 6.2vh, 84px);
+    --手牌高: 160px;
     --卡高-查看: clamp(104px, 14vh, 176px);    /* 查看器里最大（要看清楚） */
     /* 半场两侧的牌库/墓地那一栏的宽度 */
     --侧栏宽: clamp(92px, 8.6vw, 132px);
@@ -26,7 +27,7 @@
   *{ box-sizing:border-box; }
   html,body{ height:100%; overflow:hidden; }
   body{ margin:0; color:#f3ead8; font:12px/1.4 "Microsoft YaHei","PingFang SC",system-ui,sans-serif;
-        background:radial-gradient(circle at 30% -10%, #57351a, #241407 65%) #241407; }
+        background:#000 url('/cards/背景.jpg') center / cover no-repeat; }
   /* 只有日志区（和输入框）允许选中复制；其余 UI 文字不支持选中，避免拖拽时误选 */
   html,body{ user-select:none; -webkit-user-select:none; }
   .logbox, .logbox *{ user-select:text; -webkit-user-select:text; }
@@ -43,37 +44,39 @@ body.竖屏 #转屏提示{ display:flex; }
 /* 窄屏时把查看器/面板的内边距收一点 ✓（缩过之后更省地方） */
 @media (max-width:820px){
   .viewer{ padding:6px !important; }
-  .opbar{ padding:4px 6px !important; gap:4px !important; }
-  .act{ padding:3px 6px !important; font-size:12px !important; }
+  .opbar{ padding:5px 8px !important; gap:6px !important; }
+  .act{ padding:4px 7px !important; font-size:14px !important; }
 }
   /* 按钮：**一套样式**。原来基础样式是深棕渐变，而 .大厅 button 是亮金色 ——
      同一个界面里两种观感，战场里的按钮看着像「黑着不能点」。统一成亮的。 */
-  button{ background:linear-gradient(#8a5a28,#633d16); color:#fff3dd; border:1px solid #a8834a;
+  button{ background:#8a5a28; color:#fff3dd; border:1px solid #a8834a;
           border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit;
           box-shadow:0 1px 2px rgba(0,0,0,.35); }
-  button:hover{ border-color:var(--accent); color:#fff; background:linear-gradient(#9a6630,#70461a); }
+  button:hover{ border-color:var(--accent); color:#fff; background:#9a6630; }
   button:hover{ border-color:var(--accent); color:var(--accent); }
-  button.on{ border-color:#ffe9a8; color:#2b1c0e; background:linear-gradient(#ffd479,#e8b455); font-weight:700; }
+  button.on{ border-color:#ffe9a8; color:#2b1c0e; background:#ffd479; font-weight:700; }
   .dim{ color:var(--dim); }
   button:disabled{ opacity:.45; cursor:not-allowed; }
   /* 顶栏：**拆成左右两半**，各自待在自己那一栏的顶部。
      中间什么都不放 —— 战场（board）因此能从**最顶上**开始，多出一整条顶栏的高度。
      （<header> 这个标签现在只有组牌面板在用。） */
   .topbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; min-height:28px; flex:none;
-           background:linear-gradient(#4a2d14,#331e0c); border:1px solid var(--line);
+           background:#4a2d14; border:1px solid var(--line);
            border-radius:6px; padding:3px 8px; font-size:11px; }
   .topbar b{ color:var(--accent); font-size:12px; }
   .topbar .spacer{ flex:1; }
   header{ display:flex; gap:10px; align-items:center; height:30px; flex:none;
-          background:linear-gradient(#4a2d14,#331e0c); border:1px solid var(--line);
+          background:#4a2d14; border:1px solid var(--line);
           border-radius:6px; padding:0 10px; }
   header b{ color:var(--accent); font-size:13px; }
   header .spacer{ flex:1; }
 
   /* 三栏：左（放逐区 + 堆叠）| 中（战场）| 右（详情 + 日志）
      放逐区和堆叠挪到左边之后，中间只留两个半场，横向空间全给阵地。 */
-  .wrap{ flex:1; display:grid; grid-template-columns:var(--左栏宽) 1fr 330px; gap:8px; min-height:0;
-         position:relative; }      /* ← 查看器的定位参照（它是 .wrap 的孩子，不是 .board 的） */
+  .wrap{ flex:1; display:grid;
+         /* 中间战场按固定 4:3 画布定宽；左右吃剩下的宽度，比例 3:5 */
+         grid-template-columns:minmax(120px, 3fr) auto minmax(180px, 5fr);
+         gap:8px; min-height:0; position:relative; }
   /* 左栏：放逐区固定高度，堆叠占剩下的（牌多了自己滚） */
   .leftcol{ display:flex; flex-direction:column; gap:6px; min-height:0; }
   .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }   /* 顶栏右半也在这 */
@@ -84,13 +87,98 @@ body.竖屏 #转屏提示{ display:flex; }
   .stackrow .empty{ color:#b8a37c; font-size:10.5px; padding:3px 2px; }
   /* 堆叠上的「能力」（114.9，没有牌）：画成一个小小的方块，能点 */
   .cap{ display:block; width:100%; box-sizing:border-box; padding:3px 5px; border:1px solid #7a5a2a;
-        border-radius:4px; background:linear-gradient(#4a3418,#33230f); color:#e8d9b4; font-size:10px;
+        border-radius:4px; background:#4a3418; color:#e8d9b4; font-size:10px;
         line-height:1.3; word-break:break-all; }
   .cap.候选{ cursor:pointer; filter:brightness(1.3); border-color:var(--accent); }
   .cap.选好{ outline:2px solid var(--accent); outline-offset:1px; filter:brightness(1.25); }
-  .board{ display:flex; flex-direction:column; min-height:0; position:relative; }
+  .board{ display:flex; flex-direction:column; min-height:0; position:relative;
+          align-items:center; justify-content:center; overflow:hidden;
+          width:calc(1440px * var(--板缩, 1)); flex:none; }
+  /* 中间战场固定设计画布：外框只负责大小，内部不按屏幕重排；只缩这一个盒子。 */
+  .board-inner{ position:absolute; left:50%; top:50%; width:1440px; height:1280px;
+                transform:translate(-50%,-50%) scale(var(--板缩,1)); transform-origin:center center;
+                display:grid; grid-template-rows:var(--手牌高) minmax(0,1fr) auto var(--手牌高); gap:3px;
+                min-height:0; overflow:hidden; }
+  /* 三个大块：对手手牌 / 战场 / 我方操作条+手牌 */
+  .handstrip{ min-height:0; overflow:hidden; display:flex; flex-direction:column; gap:3px;
+              padding:3px 8px; background:transparent;
+              border:2px solid #3d230e; border-radius:8px; }
+  .handstrip .handrow{ flex:1; min-height:0; height:auto; }
+  /* 双方手牌区同高、同一套边界；我方操作条已经单独成一块。 */
+  .handstrip .handcol{ height:100%; min-height:0; }
+  .handstrip .handcol .zone{ flex:1; min-height:0; }
+  .handstrip .zone{ min-height:0; overflow:hidden; }
+  .handstrip .zone .row{ height:100%; min-height:0; padding-left:0; justify-content:center; gap:6px; }
+  .handstrip .row .card{ height:100%; max-height:100%; }
+  .handstrip .opbar{ flex:none; }
+  .opbarzone{ min-height:0; display:flex; align-items:center; padding:0 8px;
+              position:relative; z-index:3; }
+  .opbarzone .opbar{ width:100%; }
+  .handstrip{ position:relative; z-index:2; }
+  .battlefield{ position:relative; z-index:1; }
+  .battlefield{ min-height:0; overflow:hidden; display:flex; flex-direction:column; gap:0;
+                background:var(--mat); }
+  /* 立体：只定位手牌和操作条；战场仍占原来的 grid 行。 */
+  .board.布局-立体 .handstrip.opp{ position:absolute; top:0; left:0; right:0;
+                                  height:var(--手牌高); z-index:2; }
+  .board.布局-立体 .handstrip.me{ position:absolute; bottom:0; left:0; right:0;
+                                 height:var(--手牌高); z-index:2; }
+
+  .board.布局-立体 .opbarzone{ grid-row:3; z-index:3; }
+  /* 中间是固定相机视口：手牌/操作条只决定窗口大小，不改变平面尺寸。 */
+  .board.布局-立体 .battlefield{ position:absolute; left:0; right:0;
+                                  top:var(--手牌高); bottom:var(--手牌高);
+                                  overflow:hidden; perspective:1400px; perspective-origin:50% 50%;
+                                  background:transparent; }
+  /* 立体平面里牌被透视缩小，牌面 HTML 字必须按设计尺寸放大。 */
+  .field-canvas .card{ --牌字: 28px; }
+  .field-canvas{ position:absolute; left:50%; top:50%; width:2400px; height:2200px;
+                 transform:translateY(var(--场Y,0px)) translate(-50%,-50%) translateZ(-800px) rotateX(35deg) scale(.75); transform-origin:center center;
+                 transform-style:preserve-3d; display:flex; flex-direction:column;
+                 background:transparent; border:none; box-sizing:border-box; border-radius:0; overflow:visible; }
+  .field-half{ flex:1; min-height:0; display:grid; gap:5px; padding:4px; border:none;
+               transform-style:preserve-3d; }
+  /* 上 half 的阵地在最下面（贴中线），下 half 的阵地在最上面。 */
+  .field-half:first-child{ grid-template-rows:2fr 2fr 3fr; }
+  .field-half:last-child{ grid-template-rows:3fr 2fr 2fr; }
+  .field-row{ min-height:0; background:transparent;
+              border:5px solid rgba(32,18,8,.92); border-radius:4px;
+              transform-style:preserve-3d; }
+  .field-row.land-row{ display:block; padding:2px; overflow:hidden; }
+  .field-row.mid-row{ display:flex; gap:6px; align-items:stretch; }
+  .field-row.mid-row .outside-land{ flex:1; min-width:0; }
+  .field-piles{ flex:none; display:flex; gap:4px; align-items:stretch; }
+  .field-piles .zonebox{ height:100%; max-height:100%; }
+  .field-pile-box{ height:100%; aspect-ratio:484/682; display:flex; align-items:center; justify-content:center;
+                   border:2px solid rgba(32,18,8,.9); border-radius:4px; background:rgba(74,45,20,.9);
+                   color:#ffe9b0; cursor:pointer; }
+  .field-pile-box.deck{ background:rgba(42,58,90,.9); }
+  .field-pile-box b{ font-size:18px; }
+  .field-row.land-row .outside-land{ position:relative; height:100%; min-height:0; }
+  .field-row.land-row .outside-land > .zlabel{ position:absolute; inset:0; z-index:0; pointer-events:none;
+    display:flex; align-items:center; justify-content:center; font-size:36px; font-weight:700;
+    color:rgba(64,40,15,.45); }
+  .field-row.land-row .outside-land .row{ position:relative; z-index:1; display:flex; gap:8px; height:100%; min-height:0;
+                            padding-left:60px; box-sizing:border-box; overflow-x:auto; overflow-y:hidden; }
+  .field-half.opp .field-row.land-row .outside-land > .zlabel{ transform:rotate(180deg); }
+  .field-row.land-row .card{ height:100%; max-height:100%; }
+  /* 阵地行直接放真实阵地：五格由 .slots 自己排。 */
+  .field-row.field-slots{ display:block; padding:0; border:none; background:transparent; }
+  .field-row.field-slots > .slots{ width:100%; height:100%; gap:5px; }
+  /* 保留立体画布自己的亮色框线，不套用平铺阵地的暗框。 */
+  .field-row.field-slots .slot{ border-radius:3px; background:transparent; }
+  /* 只在非候选/非选中时用默认亮框，别覆盖候选虚线和选中实线。 */
+  .field-row.field-slots .slot:not(.候选):not(.选好){
+    border:5px solid rgba(32,18,8,.92);
+  }
+  /* 立体画布不在 .half 里，对手阵地的竖排名字要单独翻转。 */
+  .field-half.opp .slot .vn{ transform:rotate(180deg); }
+  .field-slot{ min-height:0; border:5px solid rgba(32,18,8,.92); border-radius:3px;
+               background:transparent; }
+  .field-half + .field-half{ margin-top:6px; }
+
   /* 堆叠行：正被打出的牌，可点（无懈可击的目标） */
-  .stackrow{ background:linear-gradient(160deg,#3a2a16,#2b1d10); border:2px solid #7a5a2a; border-radius:6px;
+  .stackrow{ background:#3a2a16; border:2px solid #7a5a2a; border-radius:6px;
              padding:2px 6px 4px; margin-bottom:4px; flex:none; }
   .stackrow .row{ display:flex; gap:6px; align-items:flex-start; min-height:40px; }
   .stackrow .card{ height:var(--卡高-堆叠); }
@@ -102,22 +190,59 @@ body.竖屏 #转屏提示{ display:flex; }
      结果是**两边的阵地不一样高**、中线也不在中线上。
      改成 `flex:1 1 auto`：基准 = 各自的内容高，多余的空间再对半分 ——
      于是两边的差别只剩那条操作条，阵地一样高、中线就是中线。 */
-  .half{ background:linear-gradient(160deg,var(--mat2),var(--mat)); border:2px solid #3d230e;
-         padding:3px 8px; display:grid; gap:3px 8px; min-height:0; flex:1 1 auto;
+  .half{ background:transparent; border:2px solid #3d230e;
+         padding:3px 8px; display:grid; gap:3px 8px; min-height:0; flex:1 1 0;
          align-content:stretch; overflow:hidden; }
   /* ⚠ 不要用 align-self:stretch 把每一行都拉高 ——
      「阵地」那行会被拉高，而格子只有 --卡高-阵地 高，行里就空出一截。
      改成**显式行权重**：余量只给「手牌」那行，其它按内容高。 */
   .half > *{ min-height:0; }
+  /* 半场内部按可用行高收缩：所有块都留在 half 里；内容放不下时块内滚动，不再溢出到另一半。 */
+  .half > *{ overflow:hidden; }
+  .half .handrow{ height:100%; }
+  .half .handcol{ height:100%; min-height:0; }
+  .half .handcol .zone{ flex:1; min-height:0; }
+  .half .zone{ min-height:0; overflow:hidden; }
+  .half .zone .row{ height:100%; min-height:0; }
+  .half .row .card{ height:100%; max-height:100%; }
+  .half .zoneboxrow{ height:100%; min-height:0; }
+  .half .zonebox{ height:100%; max-height:100%; }
+  /* 牌库/墓地宽度由两张牌决定；剩下的宽度全给阵地以外。两边左右镜像。 */
+  .half.opp .deckzone{ grid-column:1; min-width:0; }
+  .half.opp .battleoutside{ grid-column:2; min-width:0; }
+  .half.me .battleoutside{ grid-column:1; min-width:0; }
+  .half.me .deckzone{ grid-column:2; min-width:0; }
+  /* 「阵地以外的战场」外区：左边非领土，右边领土子区；共用同一行高。 */
+  .battleoutside{ display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:6px;
+                  height:100%; min-height:0; }
+  .battleoutside > *{ display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .battleoutside .zone{ flex:1; min-height:0; }
+  .battleoutside .row{ height:100%; min-height:0; }
+  .battleoutside .outside-land{ position:relative; min-width:0; }
+  .battleoutside .outside-land > .zlabel{ position:absolute; inset:0; z-index:0; pointer-events:none;
+    display:flex; align-items:center; justify-content:center; font-size:36px; font-weight:700;
+    color:rgba(64,40,15,.45); }
+  .battleoutside .outside-land .zone{ position:relative; z-index:1; }
+  /* 对手视角：领土桌布字和手牌一样翻 180°。 */
+  .half.opp .battleoutside .outside-land > .zlabel{ transform:rotate(180deg); }
+  .half .mid2{ min-height:0; }
+  .half .mid2 > *{ min-height:0; }
+  .half .slot{ min-height:0; }
+  .half .opbar{ min-height:0; overflow:auto; }
   /* 行权重：**一行不换行的区域按内容高，余量全给「阵地」**。
      手牌 / 领土 / 战场·阵略战器都是 `flex-wrap:nowrap` 横向滚动的一行 ——
      牌再多也只有一行，给它们留高度等于白留，所以高度就是一张卡。
      对手半场：手牌(auto) 牌堆+中场(auto) 阵地(1fr)
      我方半场：阵地(1fr) 中场+牌堆(auto) 操作条(auto) 手牌(auto) */
-  .half.opp{ grid-template-rows:auto auto 1fr; }
-  .half.me{ grid-template-rows:1fr auto auto auto; }
-  .half.me{ grid-template-columns:1fr var(--侧栏宽); border-radius:0 0 8px 8px; border-top:1px dashed rgba(255,255,255,.18); }
-  .half.opp{ grid-template-columns:var(--侧栏宽) 1fr; border-radius:8px 8px 0 0; border-bottom:none; }
+  /* 每个半场按自己的块数等分高度；块内再缩放/滚动，保证五块都留在 half 里。 */
+  /* 半场两行：阵地占一行（一半高）；剩下那行的左右两半分别是阵地以外、牌库/墓地。 */
+  /* 以中线为基准：对手半场和我方半场左右镜像，参数相同（都是 1fr + 两牌宽的牌库区）。 */
+  /* 阵地 : 其余 = 5 : 4；对手阵地在下，我方阵地在上。 */
+  /* 阵地 : 阵地外 = 3 : 2；对手阵地在下，我方阵地在上。 */
+  .half.opp{ grid-template-rows:minmax(0, 2fr) minmax(0, 3fr); grid-template-columns:auto 1fr; }
+  .half.me{ grid-template-rows:minmax(0, 3fr) minmax(0, 2fr); grid-template-columns:1fr auto; }
+  .half.me{ border-radius:0 0 8px 8px; border-top:1px dashed rgba(255,255,255,.18); }
+  .half.opp{ border-radius:8px 8px 0 0; border-bottom:none; }
   /* 谁在行动看操作区那一条就够了（「X 的优先权」），半场不再描边 */
   /* 中场（领土 / 战场·阵略战器）：**吃掉半场的余量** —— 这两块才是牌数会变的地方 */
   .mid2{ display:grid; grid-template-columns:1fr 1fr; gap:6px; min-width:0; align-content:stretch; }
@@ -134,7 +259,7 @@ body.竖屏 #转屏提示{ display:flex; }
   .zone{ background:rgba(64,40,15,.16); border:1px dashed rgba(64,40,15,.5); border-radius:5px; padding:2px;
          display:flex; flex-direction:column; min-height:calc(var(--卡高-区域) + 12px); }
   .zone .row{ display:flex; gap:12px; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
-              flex:1; align-items:flex-start; }
+              flex:1; align-items:flex-start; padding-left:60px; box-sizing:border-box; }
   /* 滚动条藏掉：这些区域一行不换行，横向溢出一律用**滚轮**左右移（见下面的 wheel 监听）。
      显式滚轮条会占掉一截高度，而这里最缺的就是高度。 */
   .zone .row{ scrollbar-width:none; }
@@ -148,6 +273,9 @@ body.竖屏 #转屏提示{ display:flex; }
      否则行变高了、格子还是老高度，多出来的高度就只是空白（「阵地空间没用上」）。
      `grid-auto-rows:1fr` + 格子 height:100%，把这一行的高度分给五个格子。
      min-height 留一个下限：窗口很矮的时候阵地不能塌成一条线。 */
+  /* 阵地行容器必须自己撑满 1fr 行，否则 .slots 的 height:100% 没有参照，下面留空。 */
+  .slotrow{ grid-column:1/-1; min-height:0; height:100%; display:flex; }
+  .slotrow > .slots{ flex:1; width:100%; height:auto; min-height:0; }
   .slots{ display:grid; grid-template-columns:repeat(5,1fr); gap:clamp(4px, .8vw, 10px);
           grid-auto-rows:1fr; align-content:stretch;
           /* ⚠ **这一条是关键**：`.slots` 自己必须是 100% 高，`grid-auto-rows:1fr` 才有东西可分。
@@ -163,8 +291,12 @@ body.竖屏 #转屏提示{ display:flex; }
      那会让里面的 .slot 没有宽度、塌成内容宽，阵地名就被挤成一列竖着的字了。 */
   .slotwrap{ min-width:0; }
   .slotwrap > .slot{ width:100%; }
+  /* 对手坐在对面：对手阵地名旋转 180°，从对面看是正的。 */
+  .half.opp .slot .vn{ transform:rotate(180deg); }
   .slot .vn{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-             color:rgba(64,40,15,.55); font-size:11px; font-weight:700; letter-spacing:.1em;
+             color:rgba(64,40,15,.62); font-size:36px; font-weight:700; letter-spacing:.18em;
+             font-family:"SimHei";
+             writing-mode:vertical-rl; text-orientation:upright; line-height:1.15;
              pointer-events:none; }
   /* ⚠ 这一层必须 height:100% —— 卡片是 height:100% 跟着它算的；
      容器 auto 高的话，100% 会退回 auto，牌就不跟格子长了（只剩一块空白）。 */
@@ -177,25 +309,26 @@ body.竖屏 #转屏提示{ display:flex; }
   /* 卡：卡图盖满整张卡，关键信息压在图上 */
   /* ⚠ flex:0 0 auto 是必须的：不写的话，一行里牌多了会被 flex 横向压扁，
      而高度是写死的 → **卡框比例被破坏**，里面的 background-size:cover 一裁就变形。 */
+  .viewers .card, .leftcol .stackrow .card{ --牌字: calc(14px * var(--牌缩, 1)); }
   .card{ position:relative; overflow:hidden; cursor:pointer;
          height:var(--卡高-区域); width:auto; aspect-ratio:var(--卡比); flex:0 0 auto;
          border:2px solid var(--line); border-radius:5px;
-         background:repeating-linear-gradient(45deg,#c9bb9a,#c9bb9a 6px,#d8cdb0 6px,#d8cdb0 12px); }
+         background:#d8cdb0; }
   .card.p0{ border-color:var(--p0); }
   /* 卡背：隐藏手牌用（401/402） */
   .card.back{ background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center;
               cursor:default; border-color:#4a3a22; }
   .card.back:hover{ filter:none; }
   .card.p1{ border-color:var(--p1); }
-  .card.sel{ outline:2px solid var(--accent); outline-offset:1px; }
+  .card.is-selected{ outline:2px solid var(--accent); outline-offset:-2px; }
   /* 统一选择模型：候选 = 可点，选好 = 已选中。**不加光效**，靠亮度区分 */
   .card.候选{ cursor:pointer; filter:brightness(1.18); }
   /* 选阵地：整块阵地格子可点（点有人的 = 替任它，301.9） */
   /* 阵地：**空位置**没法用「压黑」表达可选 ✗ —— 它必须靠框线：
      可放的虚线框、已选的实线框（卡牌那边才是「不可选的压黑」✓） */
-  .slot.候选{ cursor:pointer; outline:2px dashed var(--accent); outline-offset:2px; filter:brightness(1.2); }
-  .slot.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
-  /* 已选 = 边框亮（和 173 行 .card.sel 一个表达 ✓）—— 面朝上/暗置的牌**看起来一样** */
+  .slot.候选{ cursor:pointer; border:2px dashed var(--accent); box-shadow:inset 0 0 0 1px rgba(255,233,168,.45); filter:brightness(1.2); }
+  .slot.选好{ border:3px solid var(--accent); box-shadow:inset 0 0 0 1px rgba(255,233,168,.55); filter:brightness(1.2); }
+  /* 已选 = 边框亮（和 .card.is-selected 一个表达 ✓）—— 面朝上/暗置的牌**看起来一样** */
   .card.选好{ outline:2px solid var(--accent); outline-offset:-2px; filter:brightness(1.25); }
   /* 有选择需求时，没被选中的牌一律压暗（和「不能用」同一套观感） */
   .board.选择中 .card:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
@@ -205,7 +338,7 @@ body.竖屏 #转屏提示{ display:flex; }
   .board.选择中 .pile:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
   .board.选择中 .cap:not(.候选):not(.选好){ opacity:.4; }
   /* 横置：直接把卡转 90 度表现出来（缩小一点免得压到相邻的卡） */
-  .card.isTapped{ transform: rotate(90deg) scale(0.82); margin: 0 5px; }
+  .card.isTapped{ transform: rotate(90deg); margin: 0 5px; }
   /* 优先权下：正在行动的那半场里，判断哪些牌能用。
      **不做任何边框光效** —— 只把不能用的压暗，靠对比反衬。
      不放大、不位移（一放大就会超出所在行的高度）。 */
@@ -213,6 +346,8 @@ body.竖屏 #转屏提示{ display:flex; }
   /* ⚠ 要排除「选择需求的候选」：一张地可能既是候选又不是「可用」（比如这回合已经打过地了），
      那样它会被这条压暗 —— 但它是可以点的，看起来就「黑着却能点」。 */
   .half.有可用 .card:not(.可用):not(.候选):not(.选好){ filter: brightness(.5) saturate(.65); }
+  .handstrip.有可用 .card{ transition: filter .12s; }
+  .handstrip.有可用 .card:not(.可用):not(.候选):not(.选好){ filter: brightness(.5) saturate(.65); }
   /* 查看器（墓地/牌库/放逐区）里的牌不参与这套明暗 */
   .vgrid .card, .vgrid .card:not(.可用){ filter: none; }
   .row .card{ height:var(--卡高-区域); }
@@ -222,7 +357,7 @@ body.竖屏 #转屏提示{ display:flex; }
   /* 卡框比例已经和卡图一致（--卡比），所以 cover 不会裁掉内容 */
   .card .art{ position:absolute; inset:0; background-size:cover; background-position:center; }
   .card .cst, .card .fac, .card .pt, .card .dmg{
-    position:absolute; border-radius:3px; padding:0 3px; font-size:9px; font-weight:700;
+    position:absolute; border-radius:3px; padding:0 3px; font-size:var(--牌字, 14px); font-weight:700;
     background:rgba(0,0,0,.66); color:#ffe9b0; text-shadow:0 1px 2px rgba(0,0,0,.9); }
   /* 205.1 势力印在左上；203 打出费用 / 106.1 势力支持印在右上 */
   .card .fac{ top:1px; left:1px; background:rgba(24,14,6,.8); color:#ffd479; }
@@ -232,47 +367,61 @@ body.竖屏 #转屏提示{ display:flex; }
   .card .dmg{ bottom:1px; left:1px; color:#ff9d9d; }
   .card .plate{ position:absolute; left:0; right:0; bottom:0; padding:12px 3px 2px;
                 background:linear-gradient(transparent, rgba(0,0,0,.55) 30%, rgba(0,0,0,.86)); }
-  .card .nm{ font-size:9.5px; font-weight:700; line-height:1.15; color:#fff;
-             text-shadow:0 1px 2px #000; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .card .ty{ font-size:8px; color:#e3d6bb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .nm{ font-size:var(--牌字, 14px); font-weight:700; line-height:1.15; color:#fff;
+             text-shadow:0 1px 2px #000; white-space:normal; word-break:keep-all; }
+  .card .ty{ font-size:var(--牌字, 14px); color:#e3d6bb; white-space:normal; word-break:keep-all; line-height:1.2; }
   .card .tags{ display:flex; gap:2px; flex-wrap:wrap; margin-top:1px; }
   /* 右下角：印在牌上的原始武力/体力 —— 写清楚、加大 */
-  .card .pt{ font-size:13px; font-weight:800; color:#fff8e6; background:rgba(18,10,4,.92);
-             border:1px solid #c9a05a; border-radius:9px; padding:1px 7px; line-height:18px;
+  .card .pt{ font-size:var(--牌字, 14px); font-weight:800; color:#fff8e6; background:rgba(18,10,4,.92);
+             border:1px solid #c9a05a; border-radius:9px; padding:1px 7px; line-height:20px;
              text-shadow:0 1px 3px #000; box-shadow:0 2px 6px rgba(0,0,0,.8); }
   /* 数值里的增减：+X 绿、-X 红、已受伤（已失去的体力）又是另一种颜色（都跟在印制值后面） */
   .card .pt b{ font-weight:800; }
   .card .pt b.up{ color:#8cf0a8; }
   .card .pt b.dn{ color:#ff9d9d; }
   .card .pt b.hurt{ color:#fff; background:#a3232b; border:1px solid #ff8a8a;
-                    border-radius:8px; padding:0 4px; margin-left:3px; font-size:11px; }
+                    border-radius:8px; padding:0 4px; margin-left:3px; font-size:var(--牌字, 14px); }
   /* 其他标记（灵值、天命…）：左上角一套独立渲染 */
   .card .mk{ position:absolute; top:20px; left:2px; z-index:4; display:flex; flex-direction:column; gap:2px; }
   .card .mk span{ background:#4a2f6b; border:1px solid #c79fe0; color:#f3e8ff; font-weight:800;
-                  border-radius:9px; padding:0 5px; font-size:10px; line-height:14px;
+                  border-radius:9px; padding:0 5px; font-size:var(--牌字, 14px); line-height:20px;
                   box-shadow:0 1px 4px rgba(0,0,0,.7); }
   .card .tag{ background:rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.35); color:#fff;
-              border-radius:2px; padding:0 2px; font-size:8px; }
+              border-radius:2px; padding:0 2px; font-size:var(--牌字, 14px); line-height:1.2;
+              max-width:100%; box-sizing:border-box; white-space:normal; word-break:keep-all; }
   .card .tag.kw{ background:rgba(140,90,32,.85); border-color:#ffd479; color:#ffe9c0; }
   .zoneboxrow{ display:flex; gap:6px; }
   /* ★ 手牌行：手牌区（左，可伸缩）+ 玩家框（右，固定宽，同高） */
   .handrow{ display:flex; gap:8px; align-items:stretch; }
   .handcol{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+  .handzone{ position:relative; }
+  .handempty{ position:absolute; inset:0; z-index:0; display:flex; align-items:center; justify-content:center;
+              font-size:36px; font-weight:700; color:rgba(64,40,15,.45); pointer-events:none; }
+  /* 对面玩家看这块是反的：手牌桌布字也跟着转 180°。 */
+  .handstrip.opp .handempty{ transform:rotate(180deg); }
+  .handzone .row{ position:relative; z-index:1; }
   .playerbox{ flex:0 0 var(--侧栏宽); display:flex; flex-direction:column; justify-content:center; gap:4px;
               background:rgba(64,40,15,.16); border:1px solid rgba(64,40,15,.5); border-radius:5px; padding:4px 6px; }
   .zonebox.backimg{ background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center; }
   .zonebox{ position:relative; height:var(--卡高-区域); max-height:none; width:auto; aspect-ratio:484/682; border:2px solid var(--line); border-radius:5px; cursor:pointer;
             display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
-            background:repeating-linear-gradient(45deg,#4a2d14,#4a2d14 5px,#3a2410 5px,#3a2410 10px); }
+            background:#3a2410; }
   .zonebox:hover{ border-color:var(--accent); }
   /* ⚠ 用 background-color 而不是 background 简写：简写会清掉 background-image，把牌库的卡背盖掉 */
   .zonebox.deck{ background-color:#2a3a5a; }
+  /* 墓地是公开区：把最后进入的那张牌正面铺在墓地区域里，数字压在上面。 */
+  .zonebox-face{ position:absolute; inset:0; border-radius:3px;
+                 background-size:cover; background-position:center; }
   .zonebox .zb-label{ font-size:10px; color:var(--dim); }
   .zonebox .zb-count{ font-size:18px; font-weight:700; color:#f3ead8; }
   /* 标签/张数要压在牌面上，加一层暗底保证可读 */
-  .zonebox .zb-label, .zonebox .zb-count{ position:relative; z-index:2; background:rgba(0,0,0,.55); padding:0 5px; border-radius:3px; }
+  .zonebox .zb-label{ display:none; }
+  .zonebox .zb-count{ position:absolute; left:50%; top:6px; transform:translateX(-50%);
+                       z-index:2; background:rgba(0,0,0,.55); padding:0 5px; border-radius:3px; }
+  /* 对手坐在对面：数字按对手视角在上，屏幕上就在下方。 */
+  .half.opp .zonebox .zb-count{ top:auto; bottom:6px; }
   .sharedbox{ display:flex; align-items:center; gap:8px; cursor:pointer; border:1px solid var(--line);
-              border-radius:5px; padding:3px 8px; background:linear-gradient(#3a2410,#2c1a0a); flex:none; }
+              border-radius:5px; padding:3px 8px; background:#3a2410; flex:none; }
   .sharedbox:hover{ border-color:var(--accent); }
   .sharedbox b{ color:#f3ead8; }
   /* 查看器：盖住**中间那一列**（战场），左右两栏照旧露着。
@@ -298,10 +447,10 @@ body.竖屏 #转屏提示{ display:flex; }
   .cardback{ height:var(--卡高-查看); width:auto; aspect-ratio:var(--卡比); border-radius:5px; border:2px solid #1e2a42;
     background-image:url('/cards/背面.jpg?v=2'); background-size:cover; background-position:center; background-color:#2a3a5a; }
   .prewrap{ flex:1; overflow:auto; }
-  .prebox{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
+  .prebox{ background:#3a2410; border:1px solid var(--line); border-radius:6px;
            padding:10px 12px; margin-bottom:8px; }
   .pile{ display:flex; justify-content:space-between; align-items:baseline; border-radius:3px;
-         padding:0 5px; margin-bottom:1px; background:linear-gradient(#3a2410,#2a190a);
+         padding:0 5px; margin-bottom:1px; background:#3a2410;
          border:1px solid var(--line); color:var(--dim); font-size:10px; line-height:1.25; }
   .pile b{ font-size:11px; color:#f3ead8; }
 /* 玩家当目标时，体力牌就是可点的那个（和 .card.候选/.选好 同一套视觉） */
@@ -314,7 +463,7 @@ body.竖屏 #转屏提示{ display:flex; }
   .board.选择中 .playerbox .pile{ filter:none; }
   .board.选择中 .playerbox:not(.候选):not(.选好){ filter:brightness(.5) saturate(.65); }
   .pile.选好{ outline:3px solid var(--accent); outline-offset:2px; filter:brightness(1.2); }
-  .track{ display:flex; align-items:center; background:linear-gradient(#e6d7b4,#d6c297);
+  .track{ display:flex; align-items:center; background:#e6d7b4;
           border:1px solid #4a2c12; border-radius:4px; padding:1px 4px; height:16px; }
   .track .tlabel{ color:#40280f; font-size:9px; font-weight:700; padding:0 5px; white-space:nowrap; }
   .track .cell{ flex:1; position:relative; text-align:center; border-left:1px solid rgba(64,40,15,.25); min-width:0; }
@@ -326,22 +475,22 @@ body.竖屏 #转屏提示{ display:flex; }
   /* 操作条：固定在当前玩家手牌上方 */
   /* 操作条：**自己占一整行**（grid-column:1/-1），内容再多也不许溢出盖到下面的区块上。
      ⚠ 以前写死 height:32px —— 按钮一多就溢出，看着像「盖在非阵地区上」。 */
-  .opbar{ grid-column:1/-1; min-height:32px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-          overflow-x:auto; background:linear-gradient(#4a2d14,#331e0c);
-          border:1px solid var(--accent); border-radius:6px; padding:3px 8px; }
+  .opbar{ grid-column:1/-1; min-height:42px; display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+          overflow-x:auto; background:#4a2d14; font-size:16px;
+          border:1px solid var(--accent); border-radius:6px; padding:5px 10px; }
   .opbar.off{ border-color:var(--line); background:transparent; }
   .opbar::-webkit-scrollbar{ height:5px; }
   .opbar::-webkit-scrollbar-thumb{ background:#5b3c1c; border-radius:3px; }
   .opbar .who{ color:var(--accent); font-weight:700; white-space:nowrap; }
   /* 回合归属：优先权可能是别人的，所以单独一块写清楚「这是谁的回合」 */
   .opbar .turninfo{ color:#ffe9b0; font-weight:700; white-space:nowrap;
-                    background:rgba(24,14,6,.85); border:1px solid #a8834a; border-radius:9px; padding:0 6px; }
+                    background:rgba(24,14,6,.85); border:1px solid #a8834a; border-radius:9px; padding:2px 8px; }
   .opbar .turninfo b{ color:#fff; }
   .opbar .notyours{ color:#ffb0b0; font-weight:400; }
 
   /* 侧栏：固定比例的卡图 + 固定文字区，内容不推动布局 */
   .side{ display:flex; flex-direction:column; gap:6px; min-height:0; }
-  .detail{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
+  .detail{ background:#3a2410; border:1px solid var(--line); border-radius:6px;
            padding:6px 8px; height:64%; display:flex; flex-direction:column; gap:4px; overflow:hidden; }
   .detail .dhead{ flex:none; }
   .detail .dname{ font-size:13px; font-weight:700; color:var(--accent); }
@@ -353,17 +502,26 @@ body.竖屏 #转屏提示{ display:flex; }
                   border-radius:4px; padding:4px 6px; white-space:pre-wrap; font-size:11px; color:#e8dcc2; }
   .logbox{ flex:1; min-height:70px; overflow:auto; background:#1a0f06; border:1px solid var(--line);
            border-radius:6px; padding:6px 8px; font-size:11px; white-space:pre-wrap; color:#d9c9a8; }
-  .sel{ background:#4a2d14; color:#f3ead8; border:1px solid var(--line); border-radius:4px; padding:2px 4px; font:inherit; }
 
   .poolcard{ margin:2px; font-size:11px; }
   .deckwrap{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }
   .deckwrap.单列{ grid-template-columns:1fr; }   /* 联机：只看自己那一列 */
-  .deckcol{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line);
+  .deckcol{ background:#3a2410; border:1px solid var(--line);
             border-radius:6px; padding:7px; max-height:56vh; overflow:auto; }
   .deckrow{ display:flex; justify-content:space-between; align-items:center; gap:6px; }
   
 /* ── 组牌界面（2024 改版）：牌面网格 + 右栏详情 + 筛选 ───────────────── */
-.组牌wrap{ grid-template-columns:var(--左栏宽) 1fr 330px; }
+/* 和战斗界面完全同一套三栏：左/右 3fr/5fr，中间固定板宽 1440×板缩；中间撑满高度。 */
+.组牌wrap{
+  grid-template-columns: minmax(120px, 3fr) auto minmax(180px, 5fr);
+}
+.组牌wrap > .deckmain{
+  width: calc(1440px * var(--板缩, 1));
+  min-width: 0;
+  height: 100%;
+}
+.组牌wrap > .leftcol,
+.组牌wrap > .side{ min-height: 0; height: 100%; }
 /* ⚠ .detail 的 height:64% 是给**游戏界面**定的（那里它下面还有 .logbox 日志框）。
    组牌界面的右栏没有日志框 —— 所以这里把它放开，让它**一路占到底**。 */
 .组牌wrap .detail{ height:auto; flex:1; min-height:0; }
@@ -393,18 +551,18 @@ body.竖屏 #转屏提示{ display:flex; }
   font-size:10px; font-weight:800; padding:0 3px; border-radius:0 0 2px 0; }
 .poolitem .none{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   color:var(--dim); font-size:9px; text-align:center; padding:2px;
-  background:repeating-linear-gradient(45deg,#241708,#241708 6px,#1d1207 6px,#1d1207 12px); }
+  background:#241708; }
 /* 左栏筛选器 */
-.filters{ background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px;
+.filters{ background:#3a2410; border:1px solid var(--line); border-radius:6px;
   padding:6px; display:flex; flex-direction:column; gap:5px; font-size:11px; flex:none; }
 .filters label{ color:var(--dim); display:block; margin-bottom:2px; }
 .filters select, .filters input{ width:100%; background:#1d1207; color:#f0e2c6;
   border:1px solid var(--line); border-radius:4px; padding:3px 4px; font-size:11px; }
 .势力钮{ display:flex; flex-wrap:wrap; gap:3px; }
 .势力钮 button{ padding:2px 6px; font-size:11px; }
-.势力钮 button.on{ background:linear-gradient(#9a6630,#70461a); border-color:var(--accent); color:#fff; }
+.势力钮 button.on{ background:#9a6630; border-color:var(--accent); color:#fff; }
 .poolgrid{ display:flex; flex-wrap:wrap; gap:4px; max-height:24vh; overflow:auto;
-             background:linear-gradient(#3a2410,#2c1a0a); border:1px solid var(--line); border-radius:6px; padding:6px; }
+             background:#3a2410; border:1px solid var(--line); border-radius:6px; padding:6px; }
   #错误{ position:fixed; right:12px; bottom:12px; background:#3a1f1f; border:1px solid var(--bad);
          color:#ffd9d9; padding:8px 12px; border-radius:6px; display:none; max-width:380px; z-index:9; }
 
@@ -1081,6 +1239,7 @@ function 选槽已选(名) {
  */
 function 选能动(键) { const s = 选态(键); return s === '可点' || s === '已选'; }
 function 选态(键, 行主) {
+  if (!能显示选择()) return '不可选';
   if (!选择) return '不可选';
   // ⚠ **条件先判** ✓：阵地名两半同名 ✓ —— 不先判条件的话，对方半场也会显示「已选」✗
   //   （条件不符 = 这一整槽对你不存在 ✓ 与选没选无关 ✓）
@@ -1099,8 +1258,13 @@ function 选槽进度(名) {
   const 已 = 选槽已选(名);
   return { 已选: 已.length, 需: z ? z.需 : { 最小: 0, 最大: 0 } };
 }
-function 选可点(键) { return !!(选择 && 选择.候选.has(键)); }
-function 选已中(键) { return !!(选择 && 已选全().includes(键)); }
+/** 联机时，不是自己的请求就完全不显示候选（对方操作时不能点，也不该画虚线）。 */
+function 能显示选择() {
+  const p = 状态 && 状态.当前请求 ? 状态.当前请求.玩家 : null;
+  return !状态 || 状态.我的座位 == null || p == null || p === 状态.我的座位;
+}
+function 选可点(键) { return 能显示选择() && !!(选择 && 选择.候选.has(键)); }
+function 选已中(键) { return 能显示选择() && !!(选择 && 已选全().includes(键)); }
 /* ══ 【选】内核结束 ══ */
 
 // （两个「代理」已删 ✗ —— 高亮直连【选】✓）
@@ -1135,14 +1299,16 @@ function 卡牌(c, 大, 只悬停) {
     //   直接 esc(k) 会渲染成 [object Object]
     (c.关键词 || []).map((k) => '<span class="tag kw">' + esc(typeof k === 'string' ? k : (k.名称 ?? '') + (k.数值 !== undefined ? k.数值 : '')) + '</span>').join('');
 
-  return '<div class="card p' + c.操控者 + ((选中 === c.iid || 已挑(c.iid)) ? ' sel' : '')
+  return '<div class="card p' + c.操控者 + ((选中 === c.iid || 已挑(c.iid)) ? ' is-selected' : '')
     + 框类(c.iid, 选可点(c.iid)) + (c.横置 ? ' isTapped' : '')
     + (可用牌.has(c.iid) ? ' 可用' : '')
     // ⚠ 暗置的牌服务端**不发牌面**（图 = null，对手不该看到），
     //   所以要在这里补上卡背 —— 靠 .card.back 的 background-image（web/cards/背面.jpg）。
     + (c.面 === '暗置' ? ' back' : '') + '"'
     + ' onmouseenter="悬停=' + c.iid + ';刷新详情()" onmouseleave="悬停=null;刷新详情()"'
-    + (只悬停 ? '' : ' onclick="' + 内联('选牌', c.iid) + '"') + '>'
+    + (只悬停 ? '' : ' onclick="' + (选择 && 选择.候选 && 选择.候选.has(c.iid)
+        ? 'event.stopPropagation();' + 内联('点选', c.iid)
+        : 内联('选牌', c.iid)) + '"') + '>'
     // ⚠ **暗置的牌在场上一定画卡背** ✗→✓（用户口径 ✓）：
     //   "谁能看牌面"现在由服务端按座位算 ✓ —— **热座/上帝视角**下它有权限 ✓ → 暗置牌**会带真图**下来 ✓
     //   （这是为了**侧边详情 / 查看容器**里能看正面 ✓）。
@@ -1155,7 +1321,7 @@ function 卡牌(c, 大, 只悬停) {
     + 标记块
     + pt
     + '<div class="plate">'
-    + '<div class="nm">' + esc(c.名称) + '</div>'
+    + (c.名称 ? '<div class="nm">' + esc(c.名称) + '</div>' : '')
     + '<div class="ty">' + esc(类文(c)) + '</div>'
     + (tags ? '<div class="tags">' + tags + '</div>' : '')
     + '</div></div>';
@@ -1244,7 +1410,8 @@ function 阵地行(s, i) {
       //   卡牌() 默认会挂 onclick="选牌(uid)" ✓，点上去就变成「选那张单位」
       //   → 本槽 里是 uid、不是阵地名 → 引擎「选的阵地不合法 / NaN」✓
       //   所以这种时候用**只悬停**渲染（不挂点击 ✓），让点击落到格子的 点阵地(名) 上 ✓
-      + (c ? '<span class="slotcard">' + 卡牌(c, true, (阵地态 === '可点' || 阵地态 === '已选')) + '</span>' : '')
+      + (c ? '<span class="slotcard">' + 卡牌(c, true,
+          !(选择 && 选择.候选 && 选择.候选.has(c.iid)) && (阵地态 === '可点' || 阵地态 === '已选')) + '</span>' : '')
       + '</div></div>';
   }
   return h + '</div>';
@@ -1515,7 +1682,7 @@ function 操作条内容(s) {
   let h = '<span class="turninfo"><b>' + 主动名 + '的回合</b>'
     + '</span>'
     + '<span class="who">' + esc(s.players[p].名字) + ' 的优先权</span>'
-    + '<span class="dim">' + esc(req.步骤) + (我位 === null ? '（热座：你在替 ' + esc(s.players[p].名字) + ' 操作）'
+    + '<span class="dim">' + esc(req.步骤) + (我位 === null ? ''
       : (是我 ? '（你）' : '（对手操作中）')) + '</span>';
   // 联机时对方在动 → 这一条只说「等待」（对方的牌点了也不会动，服务端按座位拒绝）
   if (我位 !== null && !是我) {
@@ -1543,7 +1710,6 @@ function 操作条内容(s) {
         h += '<button class="act" onclick="' + 内联('点动作', s.合法动作.indexOf(a)) + '">' + esc(a.标签) + '</button>';
       });
       if (!可做.length) h += '<span class="dim">这张牌现在不能用</span>';
-      h += '<button onclick="选中=null;render()">取消选择</button>';
     }
   }
   if ((s.合法动作 || []).some((a) => a.种类 === '让过')) {
@@ -1555,61 +1721,46 @@ function 操作条内容(s) {
 /** 渲染一个玩家的半场：阵地五行 + 两侧的牌库/墓地栏。`侧` = '上' | '下'（决定顺序镜像） */
 function 半场(s, i, 侧) {
   const pl = s.players[i];
-  const 领土 = pl.阵地外.filter((c) => c.类别.includes('领土'));
-  const 战场 = pl.阵地外.filter((c) => !c.类别.includes('领土'));
   const 反向 = 侧 === '对手';
-  const 手牌数 = pl.隐藏手牌 ? pl.手牌张数 : pl.手牌.length;
-  const 手牌内容 = pl.隐藏手牌
-    ? (pl.手牌张数 ? Array.from({ length: pl.手牌张数 }, () => '<div class="card back" title="对手手牌：401/402 隐藏区"></div>').join('') : '<span class="empty">（无）</span>')
-    : (pl.手牌.length ? pl.手牌.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>');
-    // ★ 玩家框（在手牌区右边，同高）：体力（兼「选这个玩家」的点击目标）+ 势力支持
-  const 玩家框 = (() => {
-    const 玩键 = '玩家' + i;
-    const 可 = 选可点(玩键);
-    const 选 = 选已中(玩键);
-    const 体力块 = '<div class="pile">体力<b>' + pl.体力 + '/' + pl.体力上限 + '</b></div>';
-    const 支持块 = '<div class="pile">势力支持<b>' + (Object.entries(pl.支持).map(([k, v]) => 符号[k] + v).join('') || '无') + '</b></div>';
-    // 点击区域 = 整个玩家框（不再只点体力条）
-    const 可点 = 可 || !!(选择 && 选已中(玩键));
-    return '<div class="playerbox' + 框类(玩键, 可) + '"'
-      + (可点 ? ' onclick="' + 内联('点选', 玩键) + '" title="选这个玩家为目标"' : '')
-      + '><div class="zlabel">' + esc(pl.名字) + '</div>' + 体力块 + 支持块 + '</div>';
-  })();
-  const 手牌列 = '<div class="handcol"><div class="zlabel">手牌（' + 手牌数 + '）'
-    + (pl.隐藏手牌 ? '<span class="dim"> 隐藏</span>' : '') + '</div>'
-    + '<div class="zone"><div class="row">' + 手牌内容 + '</div></div></div>';
-  // ★ 对手半场**镜像**：玩家框放到左边（左上角）；我方在右边
-  const 手牌行 = '<div class="handrow" style="grid-column:1/-1">'
-    + (反向 ? 玩家框 + 手牌列 : 手牌列 + 玩家框)
-    + '</div>';
-  const 领土块 = '<div><div class="zlabel">领土（' + 领土.length + '）</div><div class="zone"><div class="row">'
-    + (领土.length ? 领土.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>') + '</div></div></div>';
-  // ⚠ 分区名字按**规则书**：403.1「战场分为**阵地**和**阵地以外的战场**……由玩家操控的
-  //   非单位实体放在自己面前的战场上」。所以这里不叫「阵略/战器」—— 那只是这个区域里
-  //   最常见的两类牌；**没有阵地的单位**（301.8 失去阵地）也放在这里。
-  const 战场块 = '<div><div class="zlabel" title="403.1：战场分为阵地和阵地以外的战场。没有阵地的单位也放在这里">阵地以外的战场（' + 战场.length + '）</div><div class="zone"><div class="row">'
-    + (战场.length ? 战场.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>') + '</div></div></div>';
-  const 牌堆 = '<div><div class="zlabel">牌库 / 墓地</div>'
-    + '<div class="zoneboxrow">'
-    + '<div class="zonebox deck backimg" onclick="' + 内联('开查看', '牌库', i)
+  // 403.1：领土属于「阵地以外的战场」，但单独放在靠右的小区域。
+  const 领土原 = pl.阵地外.filter((c) => c.类别.includes('领土'));
+  // 叠放只认相邻同名牌；先按名称归组，保证同名牌连续。
+  const 领土组 = new Map();
+  for (const c of 领土原) {
+    const 名 = c.名称 ?? '';
+    if (!领土组.has(名)) 领土组.set(名, []);
+    领土组.get(名).push(c);
+  }
+  const 领土 = [...领土组.values()].flat();
+  const 非领土 = pl.阵地外.filter((c) => !c.类别.includes('领土'));
+  // 「阵地以外的战场」一个外区；手动镜像：对手领土在左、其他在右，我方反过来。
+  const 其他块 = '<div class="outside-main"><div class="zone"><div class="row">'
+    + (非领土.length ? 非领土.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>')
+    + '</div></div></div>';
+  const 领土块 = '<div class="outside-land"><span class="zlabel">领土</span><div class="zone"><div class="row">'
+    + (领土.length ? 领土.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>')
+    + '</div></div></div>';
+  const 战场外 = '<div class="battleoutside">' + (反向 ? 领土块 + 其他块 : 其他块 + 领土块) + '</div>';
+  const 牌库盒 = '<div class="zonebox deck backimg" onclick="' + 内联('开查看', '牌库', i)
     + '" title="牌库是平级区域：点开能看见张数与背面；被「检视」照到的牌显示正面（401.2/401.3 不能主动查看内容）">'
-    + '<span class="zb-label">牌库</span><span class="zb-count">' + pl.牌库张数 + '</span></div>'
-    + '<div class="zonebox" onclick="' + 内联('开查看', '墓地', i) + '" title="404.2：墓地是公开区，可以随时检视">'
-    + '<span class="zb-label">墓地</span><span class="zb-count">' + pl.墓地对数 + '</span></div>'
+    + '<span class="zb-count">' + pl.牌库张数 + '</span></div>';
+  const 最后墓地 = pl.墓地[pl.墓地.length - 1];
+  const 墓地盒 = '<div class="zonebox" onclick="' + 内联('开查看', '墓地', i) + '" title="404.2：墓地是公开区，可以随时检视">'
+    + (最后墓地 && 最后墓地.图
+      ? '<div class="zonebox-face" style="background-image:url(\'' + 最后墓地.图 + '\')"></div>'
+      : '')
+    + '<span class="zb-count">' + pl.墓地对数 + '</span></div>';
+  // 手动镜像：对手从左到右是 墓地、牌库；我方是 牌库、墓地。
+  const 牌堆 = '<div class="deckzone"><div class="zoneboxrow">'
+    + (反向 ? 墓地盒 + 牌库盒 : 牌库盒 + 墓地盒)
     + '</div></div>';
-  const 中场 = '<div class="mid2">' + (反向 ? 领土块 + 战场块 : 战场块 + 领土块) + '</div>';
   // 阵地行不再带「我方（甲）的阵地」标题 —— 名字已经写在格子里了。
-  const 阵 = '<div style="grid-column:1/-1">' + 阵地行(s, i) + '</div>';
+  const 阵 = '<div class="slotrow">' + 阵地行(s, i) + '</div>';
   // 「谁在动」**只有一处**：生成器 yield 出来的请求带的玩家（开局和回合都一样）
   const 行动者 = s.当前请求 ? s.当前请求.玩家 : null;
   const 是当前 = (行动者 === 'both' || 行动者 === i) && !s.over;
-    // 全页只有这一条操作区（放在我方半场）。它**永远显示当前该动那一方**的操作：
-  // 热座时轮到另一位玩家，操作区就显示他的动作（先在牌面上点他的牌，动作再出现在操作区）；
-  // 联机时对方回合，操作条内容会自己退化成「等 XX 操作……」
-  const 操作条 = '<div class="opbar">' + 操作条内容(s) + '</div>';;
-  const 内容 = 反向
-    ? 手牌行 + 牌堆 + 中场 + 阵          // 对手半场：**不放操作条**（操作区只有下面一条）
-    : 阵 + 中场 + 牌堆 + 操作条 + 手牌行;
+  // 手牌/玩家信息/操作条已经移出 half；这里只排战场本体。
+  const 内容 = 反向 ? 牌堆 + 战场外 + 阵 : 阵 + 战场外 + 牌堆;
   // 「有可用」加在那个半场，就触发 CSS 那条
   //   .half.有可用 .card:not(.可用):not(.候选):not(.选好){ filter: brightness(.5) saturate(.65) }
   //   → **能用的牌亮，其余全压暗；一张都用不了时所有牌都压暗**。
@@ -1629,6 +1780,39 @@ function 半场(s, i, 侧) {
   const 该压暗 = 对局中 && (热座 ? 是当前 : i === s.我的座位);
   return '<section data-块="' + (反向 ? '对手半场' : '我方半场') + '" class="half ' + (反向 ? 'opp' : 'me') + (i === s.active ? ' active' : '')
     + (是当前 ? ' acting' : '') + (该压暗 ? ' 有可用' : '') + '">' + 内容 + '</section>';
+}
+
+/** 手牌区的压黑条件和半场一致：当前能行动但没可用动作的牌压暗。 */
+function 手牌该压暗(s, i) {
+  const 对局中 = !s.开局;
+  const 热座 = s.我的座位 == null;
+  const 行动者 = s.当前请求 ? s.当前请求.玩家 : null;
+  const 是当前 = (行动者 === 'both' || 行动者 === i) && !s.over;
+  return 对局中 && (热座 ? 是当前 : i === s.我的座位);
+}
+
+/** 手牌区：手牌 + 玩家信息。和战场分离，单独占一块。 */
+function 手牌区(s, i, 侧) {
+  const pl = s.players[i];
+  const 反向 = 侧 === '对手';
+  const 手牌内容 = pl.隐藏手牌
+    ? (pl.手牌张数 ? Array.from({ length: pl.手牌张数 }, () => '<div class="card back" title="对手手牌：401/402 隐藏区"></div>').join('') : '')
+    : (pl.手牌.length ? pl.手牌.map((c) => 卡牌(c)).join('') : '');
+  const 玩家框 = (() => {
+    const 玩键 = '玩家' + i;
+    const 可 = 选可点(玩键);
+    const 选 = 选已中(玩键);
+    const 体力块 = '<div class="pile">体力<b>' + pl.体力 + '/' + pl.体力上限 + '</b></div>';
+    const 支持块 = '<div class="pile">势力支持<b>' + (Object.entries(pl.支持).map(([k, v]) => 符号[k] + v).join('') || '无') + '</b></div>';
+    const 可点 = 可 || !!(选择 && 选已中(玩键));
+    return '<div class="playerbox' + 框类(玩键, 可) + '"'
+      + (可点 ? ' onclick="' + 内联('点选', 玩键) + '" title="选这个玩家为目标"' : '')
+      + '><div class="zlabel">' + esc(pl.名字) + '</div>' + 体力块 + 支持块 + '</div>';
+  })();
+  const 手牌列 = '<div class="handcol"><div class="zone handzone">'
+    + '<span class="handempty">手牌</span>'
+    + '<div class="row">' + 手牌内容 + '</div></div></div>';
+  return '<div class="handrow">' + (反向 ? 玩家框 + 手牌列 : 手牌列 + 玩家框) + '</div>';
 }
 
 /** uid → 牌面数据。找遍所有区域（含隐藏区），找不到返回 null */
@@ -1665,8 +1849,7 @@ function 详情内容() {
   //   —— 效果检视走查看器/检视面板，103.6 开局检视走开局面板，侧边再显示一遍就是同一信息出现两次。
   const uid = 悬停 != null ? 悬停 : 选中;
   const f = 找牌(uid);
-  if (!f) return '<div class="dhead"><div class="dname">卡牌信息</div>'
-    + '<div class="dmeta">鼠标移到任意牌上看信息；点自己可用的牌，操作会出现在你手牌上方。</div></div>'
+  if (!f) return '<div class="dhead"><div class="dname">卡牌信息</div></div>'
     + '<div class="dbox"><span class="dim">（鼠标移到任意牌上）</span></div><div class="dtext">（未选中）</div>';
   const c = f.c;
   return '<div class="dhead"><div class="dname">' + esc(c.名称) + '</div>'
@@ -1887,8 +2070,7 @@ function 清筛选() { 组牌筛选 = { 词: '', 系列: '', 势力: '', 类别:
 /** 右栏的详情：和游戏里的 详情内容() 同一套版式（.dhead/.dbox/.dtext） */
 function 组牌详情() {
   const c = 组牌 && 组牌选 ? 组牌.卡池.find((x) => x.id === 组牌选) : null;
-  if (!c) return '<div class="dhead"><div class="dname">卡牌信息</div>'
-    + '<div class="dmeta">鼠标移到卡池或牌组里的牌上看它；点卡池里的牌会加进当前牌组。</div></div>'
+  if (!c) return '<div class="dhead"><div class="dname">卡牌信息</div></div>'
     + '<div class="dbox"><span class="dim">（鼠标移到一张牌上）</span></div><div class="dtext">（未选中）</div>';
   const 类 = (c.超类别 || []).concat(c.类别 || [], c.副类别 || []).join('～') || '—';
   const 需 = Object.entries(c.需求 || {}).map(([k, v]) => '{' + k + '}' + v).join('');
@@ -1925,10 +2107,18 @@ function 开查看(区, 玩家) {
 /** 关掉一个区域视图（按 `区|玩家` 键 ✓） */
 function 关视图(键) { 视图 = 视图.filter((v) => 视图键(v) !== 键); render(); }
 
-/** 预留：第二种战场布局（还没做）。按钮先留着。 */
-let 布局 = '平';
-/** 布局切换。**现在只有一种布局**，按钮留着占位（用户要求：删掉立体布局但保留按钮） */
-function 切布局() {}
+/** 中间战场两种显示布局：平铺 / 立体。只切 UI，不碰服务端状态。 */
+let 布局 = '平铺';
+function 切布局() {
+  布局 = 布局 === '平铺' ? '立体' : '平铺';
+  for (const 板 of document.querySelectorAll('.board')) {
+    板.classList.toggle('布局-平铺', 布局 === '平铺');
+    板.classList.toggle('布局-立体', 布局 === '立体');
+  }
+  const 钮 = document.querySelector('[data-布局]');
+  if (钮) 钮.textContent = 布局;
+  render();   // 两套画布是独立 DOM，切换后必须重画中间区
+}
 
 /** **一个区域视图**（看某个区域的全部牌：自己的手牌 / 墓地 / 放逐区 / 牌库张数 / 可见登记的牌）✓
  *  ⚠ 它是**一块**（`.viewer`），由 `.viewers` 装好几块 ✓ —— 不再有「空占位」那套 ✗（块表的活 ✓）。 */
@@ -2136,6 +2326,7 @@ function render() {
     //   ⚠ 搜索框打字那条路**不走这里**（见 设筛选）—— 这是给「点筛选按钮／切组／存牌」那些整画用的。
     const 记的 = 记住滚动();
     document.getElementById('app').innerHTML = 组牌面板();
+    适配组牌();
     恢复滚动(记的);
     return;
   }
@@ -2238,9 +2429,6 @@ const 顶栏左 = '<div class="topbar"><b>阵面对决</b>'
     + '<span>' + (p === null ? (s.开局 && s.当前请求 ? '开局中：' + esc(s.当前请求.步骤) : '—') : '当前：' + esc(s.players[p].名字)) + '</span>'
     + '</div>';
 const 顶栏右 = '<div class="topbar">'
-    + '<span class="dim">' + esc(s.players[0].名字) + ' ' + s.players[0].体力 + '/' + s.players[0].体力上限 + '　'
-    + esc(s.players[1].名字) + ' ' + s.players[1].体力 + '/' + s.players[1].体力上限 + '</span>'
-    
       // AI 托管：热座两边都能开；联机只能开自己的（服务端也会拦）
       + (() => {
         const 我位 = s.我的座位;
@@ -2259,8 +2447,11 @@ const 顶栏右 = '<div class="topbar">'
           + '</select>';
       })()
     + (令牌 ? '<button class="次" onclick="离座()" title="离开这个房间；对局中离开会让本局作废">离座</button>' : '')
-    + '<button onclick="切布局()">布局</button>'
-    + '<button onclick="新局()">新开一局</button><button onclick="打开组牌()">组牌／换牌</button></div>';
+    + '<button data-布局 onclick="切布局()" title="切换中间战场显示布局">' + 布局 + '</button>'
+    + (s.我的座位 == null || s.我的座位 === 0
+      ? '<button onclick="新局()">新开一局</button>'
+      : '<button disabled title="只有房主（1号座位）能新开一局">新开一局</button>')
+    + '<button onclick="打开组牌()">组牌／换牌</button></div>';
 let h = '';
   // ── 大区块**分开算**，每块带 data-块 ──
   //   这样 render() 能逐块比对，只替换变了的那些：
@@ -2275,6 +2466,9 @@ let h = '';
   const 对位 = (我的位 + 1) % s.players.length;
   const 对手html = 半场(s, 对位, '对手');
   const 我方html = 半场(s, 我的位, '我方');
+  const 对手手牌 = 手牌区(s, 对位, '对手');
+  const 我方手牌 = 手牌区(s, 我的位, '我方');
+  const 我的操作条 = '<div class="opbar">' + 操作条内容(s) + '</div>';
   // ⚠ 有【选】在跑 → **只用它的额外面板** ✓（不再另外画一套 ✗）
   // ⚠ **不再二选一** ✗ —— 额外区域与主界面**逻辑上平级**（用户定的）：
   //   这一步的【选】面板（如果有）与玩家打开的区域视图（可以多个）**同时**都在 ✓，
@@ -2288,7 +2482,62 @@ let h = '';
     : '<div data-块="查看器" style="display:none"></div>';
   // ⚠ 战场拆成「板 + 查看器」两块 —— 查看器在对战里开关很频繁，
   //   不拆的话每次开关都会**连累两个半场重建**（卡图闪、滚动丢）。
-  const 板html = '<div class="board' + (选择 ? ' 选择中' : '') + '" data-块="战场">' + 对手html + 我方html + '</div>';
+  // 平铺 / 立体是两套独立固定画布；立体先完整复制平铺，后面只改立体这一份。
+  const 平铺板html = '<div class="board 布局-平铺' + (选择 ? ' 选择中' : '') + '" data-块="战场"><div class="board-inner 平铺">'
+    // 1. 对手手牌 + 玩家信息
+    + '<div class="handstrip opp' + (手牌该压暗(s, 对位) ? ' 有可用' : '') + '" data-块="对手手牌">' + 对手手牌 + '</div>'
+    // 2. 战场：只剩牌堆/中场/阵地
+    + '<div class="battlefield">' + 对手html + 我方html + '</div>'
+    // 3. 我方操作条
+    + '<div class="opbarzone" data-块="操作条">' + 我的操作条 + '</div>'
+    // 4. 我方手牌 + 玩家信息
+    + '<div class="handstrip me' + (手牌该压暗(s, 我的位) ? ' 有可用' : '') + '" data-块="我方手牌">' + 我方手牌 + '</div>'
+    + '</div></div>';
+  const 立体领土 = (i) => {
+    const 原 = s.players[i].阵地外.filter((c) => c.类别.includes('领土'));
+    const 组 = new Map();
+    for (const c of 原) {
+      const 名 = c.名称 ?? '';
+      if (!组.has(名)) 组.set(名, []);
+      组.get(名).push(c);
+    }
+    const 牌 = [...组.values()].flat();
+    return '<div class="field-row land-row"><div class="outside-land"><span class="zlabel">领土</span><div class="row">'
+      + (牌.length ? 牌.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>')
+      + '</div></div></div>';
+  };
+  const 立体其他 = (i) => {
+    const 牌 = s.players[i].阵地外.filter((c) => !c.类别.includes('领土'));
+    const pl = s.players[i];
+    const 最后墓地 = pl.墓地[pl.墓地.length - 1];
+    const 牌库 = '<div class="zonebox deck backimg field-pile" onclick="' + 内联('开查看', '牌库', i)
+      + '" title="牌库"><span class="zb-count">' + pl.牌库张数 + '</span></div>';
+    const 墓地 = '<div class="zonebox field-pile" onclick="' + 内联('开查看', '墓地', i) + '" title="墓地">'
+      + (最后墓地 && 最后墓地.图
+        ? '<div class="zonebox-face" style="background-image:url(\'' + 最后墓地.图 + '\')"></div>'
+        : '')
+      + '<span class="zb-count">' + pl.墓地对数 + '</span></div>';
+    return '<div class="field-row land-row mid-row"><div class="outside-land"><div class="row">'
+      + (牌.length ? 牌.map((c) => 卡牌(c)).join('') : '<span class="empty">（无）</span>')
+      + '</div></div><div class="field-piles">' + 牌库 + 墓地 + '</div></div>';
+  };
+  const 立体上 = '<div class="field-half opp">'
+    + 立体领土(对位) + 立体其他(对位)
+    + '<div class="field-row field-slots">' + 阵地行(s, 对位) + '</div></div>';
+  const 立体下 = '<div class="field-half me">'
+    + '<div class="field-row field-slots">' + 阵地行(s, 我的位) + '</div>'
+    + 立体其他(我的位) + 立体领土(我的位) + '</div>';
+  const 立体板html = '<div class="board 布局-立体' + (选择 ? ' 选择中' : '') + '" data-块="战场"><div class="board-inner 立体">'
+    // 1. 对手手牌 + 玩家信息
+    + '<div class="handstrip opp' + (手牌该压暗(s, 对位) ? ' 有可用' : '') + '" data-块="对手手牌">' + 对手手牌 + '</div>'
+    // 2. 战场：立体独立空画布，只显示两个 half
+    + '<div class="battlefield"><div class="field-canvas">' + 立体上 + 立体下 + '</div></div>'
+    // 3. 我方操作条
+    + '<div class="opbarzone" data-块="操作条">' + 我的操作条 + '</div>'
+    // 4. 我方手牌 + 玩家信息
+    + '<div class="handstrip me' + (手牌该压暗(s, 我的位) ? ' 有可用' : '') + '" data-块="我方手牌">' + 我方手牌 + '</div>'
+    + '</div></div>';
+  const 板html = 布局 === '立体' ? 立体板html : 平铺板html;
   const 查看html块 = 查看html;
   const 右栏html = '<div class="side" data-块="右栏">' + 顶栏右
     + '<div class="detail" id="详情">' + 详情内容() + '</div>'
@@ -2317,6 +2566,7 @@ let h = '';
     }
   }
   恢复滚动(记的滚动);
+  适配战场();
   // 日志：只追加新行（**原本就贴着底才跟着滚**，否则你往上翻的时候会被轮询拽回去）
   同步日志(s.log, 日志原本贴底);
   // ⚠ 这里**不再有自动开/关** ✓（已全部删除 ✗）。  上次状态串 = 状态串(s);
@@ -2394,6 +2644,61 @@ document.addEventListener('wheel', (e) => {
    设计宽度 1280 ✓；窗口更窄就整体 `zoom` 缩放（桌面上 = 1 ✓ 完全不变 ✓）。
    竖屏时给一块提示让玩家转屏 ✓（这块布局是宽版 ✓，竖屏缩下去没法看 ✗）。 */
 const 设计宽 = 1280;
+const 设计板宽 = 1440;
+const 设计板高 = 1280;
+/** 同名领土在领土区里叠放：后一张盖住前一张一半。 */
+function 重叠领土() {
+  for (const 行 of document.querySelectorAll('.outside-land .row')) {
+    let 前名 = null;
+    for (const 牌 of 行.querySelectorAll(':scope > .card')) {
+      const 名 = 牌.querySelector('.nm')?.textContent ?? '';
+      牌.style.marginLeft = (前名 !== null && 名 === 前名)
+        ? (-牌.offsetWidth / 2) + 'px' : '';
+      前名 = 名;
+    }
+  }
+}
+
+/** 组牌界面也用战斗界面同一块板宽：中间 = 1440 × 板缩。 */
+function 适配组牌() {
+  const 框 = document.querySelector('#app > .组牌wrap');
+  if (!框) return;
+  const 高 = 框.clientHeight;
+  if (高 <= 0) return;
+  框.style.setProperty('--板缩', String(高 / 设计板高));
+}
+
+/** 中间战场：外框多大，只改 board-inner 的整体缩放；内部固定按设计画布排。 */
+function 适配战场() {
+  const 框 = document.querySelector('#app .board');
+  const 内 = 框 && 框.querySelector('.board-inner');
+  if (!框 || !内) return;
+  const 高 = 框.parentElement?.clientHeight ?? 框.getBoundingClientRect().height;
+  if (高 <= 0) return;
+  // 中间占满横屏高度；左右只分剩余宽度（3:5）。
+  const 缩 = 高 / 设计板高;
+  框.style.setProperty('--板缩', String(缩));
+  document.documentElement.style.setProperty('--牌缩', String(缩));
+  重叠领土();
+  适配立体战场();
+}
+/** 按投影后的实际包围盒，把立体战场顶部贴到视口顶部。 */
+function 适配立体战场() {
+  const 场 = document.querySelector('.board.布局-立体 .battlefield');
+  const 画 = 场 && 场.querySelector('.field-canvas');
+  if (!场 || !画) return;
+  画.style.setProperty('--场Y', '0px');
+  const 缩 = Number(getComputedStyle(场).getPropertyValue('--板缩')) || 1;
+  let y = 0;
+  for (let i = 0; i < 2; i++) {
+    const 场R = 场.getBoundingClientRect();
+    const 画R = 画.getBoundingClientRect();
+    const 差 = (场R.top - 画R.top) / 缩;
+    if (Math.abs(差) < 0.5) break;
+    y += 差;
+    画.style.setProperty('--场Y', y + 'px');
+  }
+}
 function 适配屏幕() {
   // ⚠ 防御：测试桩/残缺环境里没有 window.innerWidth 或 body.classList ✗ →
   //   适配是**锦上添花** ✓，绝不能因此让整个脚本挂掉 ✗（客户端 harness 就在这种环境里跑 ✓）。
@@ -2416,10 +2721,16 @@ function 适配屏幕() {
   document.documentElement.style.setProperty('--缩放', String(缩));
   document.body.style.zoom = 缩 === 1 ? '' : String(缩);
   document.body.classList.toggle('竖屏', !横);
+  适配战场();
+  适配组牌();
 }
 window.addEventListener('resize', 适配屏幕);
 window.addEventListener('orientationchange', () => setTimeout(适配屏幕, 120));
 适配屏幕();
+
+/* 界面内禁用浏览器默认右键菜单（手机端没有右键，统一关掉）。 */
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
 
 /**
  * **局部更新**：逐块比对，只替换变了的那块。

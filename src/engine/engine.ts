@@ -6,17 +6,21 @@
 import type { 事件名,
   CardDef, 阵地, Support, SupportMap, ResolveStep, Condition, Value,
   TargetSpec, Selector, TriggeredAbility, ActivatedAbility, ModeSpec, StaticAbility, RecipientRef, ReplacementSpec,
-  指示物定义, 筛选, 规则动作, 规则持续效应, 自身限制, 费用修正, 费用步,
-  筛选属性, 筛选条件, Ability, 关键词能力 , 玩家动作, 玩家指向, Trigger, 阵地目的地, 记到规格 } from './types.js';
+  指示物定义, 筛选, 筛选节点, 规则动作, 规则持续效应, 自身限制, 费用修正, 费用步,
+  筛选属性, 筛选条件, 支付筛选, Ability, 关键词能力 , 玩家动作, 玩家指向, Trigger, 阵地目的地, 记到规格, 记忆集合, 伤害匹配, 事件参与者, 伤害产生方式,
+  筛选比较, 字段类型, 条件值, 物件关系, 规则修改 } from './types.js';
 import { 阵地顺序 } from './types.js';
-import type { GameState, Obj, PlayerState, StackItem, TempEffect, Zone, 触发事件 } from './state.js';
+import type { GameState, Obj, PlayerState, StackItem, TempEffect, Zone, 触发事件, LKI } from './state.js';
 import { 势力支持度, 造对象, 相对阵地, 相邻阵地, 斜对阵地, 盖时间印记, 盖时间印记翻面, 盖章,
   写面, 写横置, 写阵地, 写区域, 写操控者, 写整备, 写伤害, 写附属在, 写佩带在, 写时间印记,
   加标记, 写标记表, 清标记, 改标记数量, 改标记, 写记忆, 清记忆,
   战场加, 战场删, 写战场, 加连续效应, 写连续效应, 加临时效应, 写临时效应, 加事件记录, 写事件记录,
   堆叠加, 堆叠弹出, 堆叠取第, 清检视, 登记检视表, 写def, 写复制 } from './state.js';
-import { 计算特征, 计算到层, 当前上限层, type 特征 as 特征类型, 符合选择器, 符合筛选, 无双名称, 关键词数值, 关键词基名, 关键词解析表, 解析能力, 能解析, 记事件, 有效控制器 , 符合域, 计算玩家特征, type 玩家特征 as 玩家特征类型 } from './continuous.js';
+import { 计算特征, 计算到层, 当前上限层, type 特征 as 特征类型, 符合选择器, 符合筛选, 发生过, 历史事件们, 历史合计, 无双名称, 关键词数值, 关键词基名, 关键词解析表, 解析能力, 能解析, 记事件, 有效控制器 , 符合域, 计算玩家特征, type 玩家特征 as 玩家特征类型 } from './continuous.js';
 import { 费用点数值, 牌面费用值, 取费用步, 支付费用 } from './费用.js';
+import { 触发匹配 } from './trigger.js';
+import { 取事件字段类型 } from './事件定义.js';
+import { 比较值 } from './比较.js';
 import { 应用复制, 造复制对象, 恢复复制 } from './copy.js';
 import { 替代阶段, 当前类别候选, 已用过, type 替代事件 } from './replacement.js';
 
@@ -69,7 +73,7 @@ export function 收集规则持续(g: GameState): 规则持续项[] {
       if (ab.条件 && !判断(g, 操控者, ab.条件, o)) continue;
       for (const e of ab.效应 ?? []) {
         if (!('类别' in e)) continue;
-        if (!['禁止动作','动作要求','费用修正','手牌上限','自身限制','必须动作','许可','判定费用修正','自身攻击费用'].includes(e.类别)) continue;
+        if (e.类别 !== '规则修改') continue;
         out.push({ 来源: o, 操控者, 效应: e as 规则持续效应 });
       }
     }
@@ -83,18 +87,19 @@ function 规则适用(适用: '你' | '对手' | '任意', 操控者: number, p:
 
 export function 规则禁止(g: GameState, p: number, 动作: 规则动作, 对象?: Obj): boolean {
   return 收集规则持续(g).some(({ 来源, 操控者, 效应 }) => {
-    if (效应.类别 !== '禁止动作' || 效应.动作 !== 动作) return false;
+    if (效应.作用点 !== '动作' || 效应.模式 !== '禁止' || 效应.动作 !== 动作) return false;
     if (!规则适用(效应.适用, 操控者, p)) return false;
-    if (效应.筛选 && (!对象 || !符合筛选(g, 对象, 效应.筛选, 有效特征(g, 对象)))) return false;
+    if (效应.筛选 && (!对象 || !符合筛选(g, 对象, 效应.筛选, 有效特征(g, 对象), undefined, undefined, 来源, 操控者))) return false;
+    if (效应.条件 && (!对象 || !判断(g, 操控者, 效应.条件, 对象, undefined, 来源))) return false;
     return !(g.players[p]!.豁免 ?? []).some((e) => e.禁止 === 动作 && g.turn <= e.到期
       && (e.来源 === undefined || e.来源 === 来源.iid));
   });
 }
 
-export function 规则要求(g: GameState, p: number, 动作: string, 对象?: string): { 来源: Obj; 要求: 规则持续效应 & { 类别: '动作要求' } }[] {
-  const out: { 来源: Obj; 要求: 规则持续效应 & { 类别: '动作要求' } }[] = [];
+export function 规则要求(g: GameState, p: number, 动作: string, 对象?: string): { 来源: Obj; 要求: Extract<规则修改, { 作用点: '动作'; 模式: '要求' }> }[] {
+  const out: { 来源: Obj; 要求: Extract<规则修改, { 作用点: '动作'; 模式: '要求' }> }[] = [];
   for (const { 来源, 操控者, 效应 } of 收集规则持续(g)) {
-    if (效应.类别 !== '动作要求' || 效应.动作 !== 动作) continue;
+    if (效应.作用点 !== '动作' || 效应.模式 !== '要求' || 效应.动作 !== 动作) continue;
     if (效应.对象 !== undefined && 效应.对象 !== 对象) continue;
     if (!规则适用(效应.适用 ?? '任意', 操控者, p)) continue;
     if (效应.条件 && !判断(g, p, 效应.条件, 来源)) continue;
@@ -106,7 +111,7 @@ export function 规则要求(g: GameState, p: number, 动作: string, 对象?: s
 export function 规则费用修正(g: GameState, p: number): { 来源: Obj; 修正: 费用修正 }[] {
   const out: { 来源: Obj; 修正: 费用修正 }[] = [];
   for (const { 来源, 操控者, 效应 } of 收集规则持续(g)) {
-    if (效应.类别 !== '费用修正') continue;
+    if (效应.作用点 !== '费用' || 效应.费用类型 === '判定' || 效应.费用类型 === '自身攻击' || 效应.费用类型 === '自身') continue;
     if (!规则适用(效应.修正.适用, 操控者, p)) continue;
     out.push({ 来源, 修正: 效应.修正 });
   }
@@ -116,7 +121,7 @@ export function 规则费用修正(g: GameState, p: number): { 来源: Obj; 修�
 export function 规则手牌上限(g: GameState, p: number): number {
   let n = 0;
   for (const { 操控者, 效应 } of 收集规则持续(g)) {
-    if (效应.类别 !== '手牌上限' || !规则适用(效应.适用, 操控者, p)) continue;
+    if (效应.作用点 !== '玩家上限' || !规则适用(效应.适用, 操控者, p)) continue;
     n += 效应.值;
   }
   return n;
@@ -124,10 +129,11 @@ export function 规则手牌上限(g: GameState, p: number): number {
 
 export function 规则自身限制(g: GameState, o: Obj, 哪种: 自身限制): boolean {
   if (!有规则叙述(g, o)) return false;
-  return ((o.def.能力?.能力 ?? []) as StaticAbility[]).some((ab) =>
+  // 用有效能力列表：外交关联能力、层6 授予的能力也要算进来。
+  return (有效能力列表(g, o) as StaticAbility[]).some((ab) =>
     ab.种类 === '静止式'
     && (!ab.条件 || 判断(g, 有效控制器(g, o), ab.条件, o))
-    && (ab.效应 ?? []).some((e) => '类别' in e && e.类别 === '自身限制' && (e as { 限制: 自身限制[] }).限制.includes(哪种)));
+    && (ab.效应 ?? []).some((e) => '作用点' in e && e.作用点 === '限制' && e.限制.includes(哪种)));
 }
 
 export function 规则必须动作(g: GameState, o: Obj, 动作: '发起战斗'): boolean {
@@ -135,20 +141,21 @@ export function 规则必须动作(g: GameState, o: Obj, 动作: '发起战斗')
   return ((o.def.能力?.能力 ?? []) as StaticAbility[]).some((ab) =>
     ab.种类 === '静止式'
     && (!ab.条件 || 判断(g, 有效控制器(g, o), ab.条件, o))
-    && (ab.效应 ?? []).some((e) => '类别' in e && e.类别 === '必须动作' && (e as { 动作: string }).动作 === 动作));
+    && (ab.效应 ?? []).some((e) => '作用点' in e && e.作用点 === '动作' && e.模式 === '必须' && e.动作 === 动作));
 }
 
-export function 规则许可(g: GameState, p: number, 对象: Obj, 视同: '伏击'): boolean {
+export function 规则许可(g: GameState, p: number, 对象: Obj, 视同: '伏击' | '神速', 用途: '打出' | '启动能力', 能力?: string): boolean {
   return 收集规则持续(g).some(({ 操控者, 效应 }) => {
-    if (效应.类别 !== '许可' || 效应.视同 !== 视同 || 操控者 !== p) return false;
-    return !效应.筛选 || 符合筛选(g, 对象, 效应.筛选, 有效特征(g, 对象));
+    if (效应.作用点 !== '许可' || 效应.视同 !== 视同 || 效应.用途 !== 用途 || 操控者 !== p) return false;
+    if (效应.能力 !== undefined && 效应.能力 !== 能力) return false;
+    return !效应.筛选 || 符合筛选(g, 对象, 效应.筛选, 有效特征(g, 对象), undefined, undefined, undefined, p);
   });
 }
 
 export function 规则判定费用修正(g: GameState, p: number): number {
   let n = 0;
   for (const { 操控者, 效应 } of 收集规则持续(g)) {
-    if (效应.类别 === '判定费用修正' && 操控者 === p) n += 效应.值;
+    if (效应.作用点 === '费用' && 效应.费用类型 === '判定' && 操控者 === p) n += 效应.值;
   }
   return n;
 }
@@ -159,7 +166,7 @@ export function 规则自身攻击费用(g: GameState, o: Obj): number {
   for (const ab of ((o.def.能力?.能力 ?? []) as StaticAbility[])) {
     if (ab.种类 !== '静止式') continue;
     if (ab.条件 && !判断(g, 有效控制器(g, o), ab.条件, o)) continue;
-    for (const e of ab.效应 ?? []) if ('类别' in e && e.类别 === '自身攻击费用') n += (e as { 点数: number }).点数;
+    for (const e of ab.效应 ?? []) if ('作用点' in e && e.作用点 === '费用' && e.费用类型 === '自身攻击') n += e.点数;
   }
   return n;
 }
@@ -424,7 +431,7 @@ export function 抓牌(g: GameState, p: number, n: number, 起始: boolean = fal
     实抓++;
       // ★ 121.2：牌每次只能抓一张 → 抓 N 张 = N 次单独的抓牌动作（N 次「抓牌」事件 + N 次触发）
       //   （官例：无中生有抓两张 → 徐夫人触发 2 次）以前只在循环外记一次 ✗
-      if (!起始) { 记事件(g, '抓牌', { 受方: p, 数量: 1 }); 排队事件触发(g, '抓牌', p); }
+      if (!起始) { 记事件(g, '抓牌', { 抓牌玩家: p, 抓牌数量: 1 }); 排队事件触发(g, '抓牌', p); }
   }
   if (!起始 && 实抓 > 0) 记录(g, pl.name + ' 抓 ' + 实抓 + ' 张牌');
 }
@@ -438,7 +445,7 @@ export function 抓牌(g: GameState, p: number, n: number, 起始: boolean = fal
 /** 704.5e「具有致命能力之来源」/ 702.46b「具有据守能力」/ 702.3b「具有洞察」… —— 有没有这个关键词 */
 /**
 /**
- * **带「特征」参数的关键词**：读出它的 特征 筛选（702.2 抵抗 / 702.5 附属）。
+ * **带「特征」参数的关键词**：读出它的 特征 筛选（702.2 抵抗）。
  * 「万物抵抗」（702.2d）写成**没有 特征**的抵抗 —— 对每个物件都成立（返回 undefined）。
  *
  * ⚠ 来源是 `特征.关键词`（和 `有词` / `词值` 同一个出处）—— 印制的和层6 授予的都在里面。
@@ -446,10 +453,6 @@ export function 抓牌(g: GameState, p: number, n: number, 起始: boolean = fal
  *   （154 讨贼先锋·皇甫嵩那种「把带筛选的抵抗授予别的单位」）。
  *   ⚠ 所以要 `g` —— 别拿掉（`有效特征` 需要它）。
  */
-export function 关键词特征(g: GameState, o: Obj, 名称: string): 筛选 | undefined {
-  for (const k of 有效特征(g, o).关键词) if (k.名称 === 名称) return k.特征;
-  return undefined;
-}
 /** 这个实体有没有这条带特征的关键词（用来区分「写了特征」和「万物 XX」） */
 export function 有带特征的关键词(g: GameState, o: Obj, 名称: string): boolean {
   return 有效特征(g, o).关键词.some((k) => k.名称 === 名称);
@@ -461,7 +464,7 @@ export function 有带特征的关键词(g: GameState, o: Obj, 名称: string): 
  */
 export function 抵抗挡得住目标(g: GameState, o: Obj, 来源: Obj | null): boolean {
   if (!有带特征的关键词(g, o, '抵抗')) return false;
-  const 特 = 关键词特征(g, o, '抵抗');
+  const 特 = 有效特征(g, o).关键词.find((k) => k.名称 === '抵抗')?.特征;
   if (!特) return true;                       // 702.2d 万物抵抗
   if (!来源) return false;
   return 符合筛选(g, 来源, 特, 有效特征(g, 来源));
@@ -676,11 +679,8 @@ export function 有规则叙述(g: GameState, o: Obj): boolean {
  * 「**你**将一张基本领土暗置时」里的「你」= **做这个动作的玩家**（施动者），
  * 不是「那个物件的操控者」—— 两者可能不同（例如替对手暗置他的领土）。
  */
-export function 排队面触发(g: GameState, o: Obj, 面: '明置' | '暗置', 施动者: number, 变化前: 特征类型): void {
-  // ⚠ 走通用广播 ✓（以前自己扫一遍 ✗，只按「操控者===施动者」✗）。
-  //   「当你将一张**基本领土**暗置时」判的是**变化之前**的特征 ✓（709.2a ✓）——所以传 特征覆盖 ✓。
-  void 施动者;
-  排队单位事件触发(g, 面, o, { 事件受方: o, 特征覆盖: 变化前 });
+export function 排队面触发(g: GameState, o: Obj, 面: '明置' | '暗置', 施动者: number, 变化前: LKI): void {
+  排队单位事件触发(g, 面, o, { 事件受方: o, 施动者, 变化前 });
 }
 /**
  * 701.11：**明置 / 暗置的唯一入口**。
@@ -698,11 +698,11 @@ export function 设面(g: GameState, o: Obj, 面: '明置' | '暗置', 施动者
   // ⚠ **先把「变化前」的样子算出来**：明置/暗置的触发要按**动作发生那一刻**判。
   //   「当你将一张基本领土暗置时」—— 对象那时**还是**基本领土；
   //   暗置之后它才成为「暗置领土」（709.2a），名称/副类别/势力支持/超类别都没了。
-  const 变化前 = 有效特征(g, o);
+  const 变化前 = 拍LKI(g, o);
   const 谁 = 施动者 ?? 有效控制器(g, o);
   写面(g, o, 面);
   记录(g, o.def.全名 + ' 被' + 面);
-  记事件(g, 面, { 受方: o.iid });
+  记事件(g, 面, { [面 + '角色']: 变化前, [面 + '玩家']: 谁 });
   排队面触发(g, o, 面, 谁, 变化前);
   return true;
 }
@@ -755,29 +755,49 @@ export function 满足势力需求(g: GameState, p: number, req: { 符号: Suppo
 }
 
 // ── 118 / 304.8 / 605 支付数字费用 ───────────────────────────────
+/** 605.4：这条费用能力是在为哪张牌/哪个能力付钱。 */
+export interface 支付对象 {
+  物件: Obj;
+  用途: NonNullable<支付筛选['用途']>;
+  能力?: ActivatedAbility;
+}
+
 interface 费用来源 { obj: Obj; 提供: number; 牺牲: boolean }
 
+/** 605.4：没有支付对象时，带“为”限制的来源一律不能用；不能默认放行。 */
+function 支付筛选命中(g: GameState, 对象: 支付对象 | undefined, 限制: 支付筛选 | undefined): boolean {
+  if (!限制) return true;
+  if (!限制.用途 && !限制.物件?.length) return true;
+  if (!对象) return false;
+  if (限制.用途 && 对象.用途 !== 限制.用途) return false;
+  if (限制.物件?.length) {
+    if (!符合筛选(g, 对象.物件, 限制.物件, 有效特征(g, 对象.物件))) return false;
+  }
+  return true;
+}
+
 /** 这个玩家现在能拿来付钱的**费用来源**：304.8 的固有 {1} + 场上那些费用能力 */
-function 收集费用来源(g: GameState, p: number): 费用来源[] {
+function 收集费用来源(g: GameState, p: number, 对象?: 支付对象, 忽略限制 = false): 费用来源[] {
   const out: 费用来源[] = [];
   for (const o of g.战场) {
     if (有效控制器(g, o) !== p) continue;
-    if (!是类别(g, o, '领土') || o.tapped || o.区域 !== '战场') continue;
-    // ⚠ 暗置领土**照样能提供费用** ——
-    //   304.8 的「{付费}{横置}→提供{1}」是**规则赋予领土的固有能力**，不是卡面的「规则描述」；
-    //   709.2a 抹掉的是「规则描述、名称、势力支持、副类别」，**没抹掉类别**，
-    //   而 304.4b 说暗置打出的牌「进战场后是一个暗置的**领土**」—— 它仍是领土，所以仍然有 304.8。
-    //   另：202.1b 只挡**势力支持**（「暗置领土不具有任何势力支持」），从没提费用 —— 两套资源。
-    //   卡面印出来的费用能力才算「规则描述」（本函数里收集它的那个循环），那个暗置时确实没有。
-    // 304.8 固有能力：{付费}{横置}->提供{1}
-    out.push({ obj: o, 提供: 1, 牺牲: false });
-    // 卡面印出的费用能力（例如山民流营：{付费}{横置}，牺牲此领土->提供{2}）
+    if (o.区域 !== '战场') continue;
+    // 304.8：领土固有「{付费}{横置}→提供{1}」；非领土没有这条。
+    // 暗置领土仍是领土，一样提供费用。
+    if (是类别(g, o, '领土') && !o.tapped) {
+      out.push({ obj: o, 提供: 1, 牺牲: false });
+    }
+    // 卡面费用能力：领土、单位、战器等所有类别都可能有。
     for (const ab of (o.def.能力?.能力 ?? []) as ActivatedAbility[]) {
-      // 605.4 / 304.8：「提供{N}」是费用步列表里的一条，不是能力上的独立字段
+      if (ab.种类 !== '启动式' || !ab.是费用能力) continue;
       const 提 = 取费用步(ab.费用, '提供');
-      if (ab.种类 === '启动式' && ab.是费用能力 && 提 && 取费用步(ab.费用, '横置')) {
-        out.push({ obj: o, 提供: 提.点数, 牺牲: !!取费用步(ab.费用, '牺牲') });
-      }
+      if (!提 || !取费用步(ab.费用, '横置')) continue;
+      // 301.6：单位费用能力含 {横置}，整备中的单位不能启动。
+      if (o.tapped || (是类别(g, o, '单位') && 受整备(g, o))) continue;
+      // 605.4：卡面写了“为<物件>提供{N}”，只在为那个对象付费时才能启动。
+      const 限制 = (提 as { 为?: 支付筛选 }).为;
+      if (!忽略限制 && !支付筛选命中(g, 对象, 限制)) continue;
+      out.push({ obj: o, 提供: 提.点数, 牺牲: !!取费用步(ab.费用, '牺牲') });
     }
   }
   return out;
@@ -787,11 +807,12 @@ function 收集费用来源(g: GameState, p: number): 费用来源[] {
 /**
  * 118.3a：支付数字费用是**通过启动费用能力**完成的（304.8：领土的「{付费}{横置}→提供{1}」）。
  * 118.2：支付费用的玩家**有机会启动费用能力** —— 也就是由他自己挑启动哪些，所以这里支持手动指定。
+ * 605.4：支付对象必须和生成候选时相同，否则带“为”限制的来源会查不到。
  * @param 指定 玩家挑的来源 uid（可以多给，只启动刚好够的那些）。不给则自动挑。
  */
-export function 支付数字费用(g: GameState, p: number, 点数: number, 指定?: number[]): boolean {
+export function 支付数字费用(g: GameState, p: number, 点数: number, 指定?: number[], 对象?: 支付对象): boolean {
   if (点数 <= 0) return true;
-  const 来源 = 收集费用来源(g, p);
+  const 来源 = 收集费用来源(g, p, 对象);
   if (指定) {
     // ⚠ **按 uid 去重** ✓ —— 同一块地只能在这里提供一次 ✓（否则 [A,A,A,A] 就能付 4 点 ✗）。
     //   注意：这只管「支付源」自己 ✓ —— 「费用牺牲」是**另一个参数** ✓，
@@ -822,23 +843,26 @@ export function 支付数字费用(g: GameState, p: number, 点数: number, 指�
 }
 
 /** 预判能否付得起（逻辑与 支付数字费用 一致，但不实际支付） */
-/** 现在可以启动哪些费用能力（界面拿它让玩家挑地） */
-export function 可支付来源(g: GameState, p: number): { iid: number; 名称: string; 提供: number; 牺牲: boolean }[] {
-  return 收集费用来源(g, p).map((s) => ({ iid: s.obj.iid, 名称: s.obj.def.全名, 提供: s.提供, 牺牲: s.牺牲 }));
+/**
+ * 现在可以启动哪些费用能力。
+ * 默认按当前支付对象过滤 605.4 的“为”限制；忽略限制仅供客户端算已挑点数的完整表。
+ */
+export function 可支付来源(g: GameState, p: number, 对象?: 支付对象, 忽略限制 = false): { iid: number; 名称: string; 提供: number; 牺牲: boolean }[] {
+  return 收集费用来源(g, p, 对象, 忽略限制).map((s) => ({ iid: s.obj.iid, 名称: s.obj.def.全名, 提供: s.提供, 牺牲: s.牺牲 }));
 }
 
 /** 现在最多能付多少数字费用（界面拿它当 X 的上限） */
-export function 可支付上限(g: GameState, p: number): number {
+export function 可支付上限(g: GameState, p: number, 对象?: 支付对象): number {
   let n = 0;
-  while (n < 40 && 可支付数字费用(g, p, n + 1)) n++;
+  while (n < 40 && 可支付数字费用(g, p, n + 1, 对象)) n++;
   return n;
 }
 
-/** 118.2：这个玩家的**费用能力**（可启动的领土）够不够付 `点数` 点数字费用 */
+/** 118.2：这个玩家的费用能力够不够付点数；605.4 的“为”限制按支付对象过滤。 */
 
-export function 可支付数字费用(g: GameState, p: number, 点数: number): boolean {
+export function 可支付数字费用(g: GameState, p: number, 点数: number, 对象?: 支付对象): boolean {
   if (点数 <= 0) return true;
-  const 来源 = 收集费用来源(g, p);
+  const 来源 = 收集费用来源(g, p, 对象);
   let acc = 0;
   for (const s of 来源) if (!s.牺牲) acc += s.提供;
   if (acc >= 点数) return true;
@@ -1028,7 +1052,7 @@ export function 转移(g: GameState, p: number, o: Obj, 到: 阵地, 路径: '�
   写记忆(g, o, 路径 === '许可' ? '本回合已移动许可' : '本回合已转移', g.turn);
   记录(g, o.def.全名 + (路径 === '许可' ? ' 移动（116.2c 许可）：' : ' 转移（702.16）：') + 到);
   // 702.12c / 701.18：转移也是「移动」—— 记事件并派发移动触发（突击就挂在这上面）
-  记事件(g, '移动', { 受方: o.iid });
+  记事件(g, '移动', { 移动角色: 拍LKI(g, o) });
   排队移动触发(g, o);
   迎击检查(g, o, 到, 有效控制器(g, o));
 }
@@ -1073,7 +1097,7 @@ export function 能打出(g: GameState, p: number, o: Obj): { ok: boolean; reaso
   //   ⚠ 限定 类别.includes('锦囊') 是为了让**数据写错时不会静默变成规则错误** ——
   //     单位/战器/阵略 要瞬发只有 702.4 伏击一条路，没有「超类别瞬发」这回事。
   // 083 吕蒙那种：战场上的永久物给的**打出许可**（「手上的吴势力单位牌视同具有伏击般打出」）
-  const 有许可 = (视同: '伏击'): boolean => 规则许可(g, p, o, 视同);
+  const 有许可 = (视同: '伏击'): boolean => 规则许可(g, p, o, 视同, '打出');
   const 瞬发 = ((o.def.类别 ?? []).includes('锦囊') && (o.def.超类别 ?? []).includes('瞬发'))
     || 有词(g, o, '伏击') || 自我授予关键词(g, o, '伏击') || 有许可('伏击');
   if (!瞬发 && !通常时机) return { ok: false, reason: '需要通常时机' };
@@ -1152,15 +1176,23 @@ function 打出内(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: �
   }
   const 目标槽: Record<string, 目标> = {};
   const 选中目标: 目标[] = [];
-  for (let i = 0; i < 规格表.length; i++) {
-    const spec = 规格表[i]!;
-    const t = 已给目标槽?.[spec.目标名] ?? 目标[i];
-    if (t === undefined) {
-      if (spec.数量.最小 > 0) { 记录(g, o.def.全名 + '：目标「' + spec.目标名 + '」缺失，打出失败'); return; }
-      continue;
+  if (规格表.length === 1) {
+    // 单槽多目标（087 调虎离山「至多两个」）：目标数组里的每个都属于这一槽。
+    const spec = 规格表[0]!;
+    const 给 = 目标.length ? 目标 : (已给目标槽?.[spec.目标名] !== undefined ? [已给目标槽[spec.目标名]] : []);
+    for (const t of 给) { if (t === undefined) continue; 选中目标.push(t); 目标槽[spec.目标名] = t; }
+    if (选中目标.length < spec.数量.最小) { 记录(g, o.def.全名 + '：目标「' + spec.目标名 + '」缺失，打出失败'); return; }
+  } else {
+    for (let i = 0; i < 规格表.length; i++) {
+      const spec = 规格表[i]!;
+      const t = 已给目标槽?.[spec.目标名] ?? 目标[i];
+      if (t === undefined) {
+        if (spec.数量.最小 > 0) { 记录(g, o.def.全名 + '：目标「' + spec.目标名 + '」缺失，打出失败'); return; }
+        continue;
+      }
+      目标槽[spec.目标名] = t;
+      选中目标.push(t);
     }
-    目标槽[spec.目标名] = t;
-    选中目标.push(t);
   }
   // 604：含 费用修正（【李典】那种加价）
   let 总费用 = 牌面费用值(o.def.打出费用) === 'X' ? 宣告X : 实际打出费用(g, p, o);
@@ -1216,7 +1248,7 @@ function 打出内(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: �
         return;
     }
   }
-  if (!支付数字费用(g, p, 总费用, 支付源)) { 记录(g, '支付失败：' + o.def.全名); return; }
+  if (!支付数字费用(g, p, 总费用, 支付源, { 物件: o, 用途: '打出' })) { 记录(g, '支付失败：' + o.def.全名); return; }
   // 034：用掉一条「下一张」减费（打出即消耗）
   {
     const i = (g.临时费用修正 ?? []).findIndex((r) => r.玩家 === p
@@ -1247,7 +1279,7 @@ function 打出内(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: �
   };
   item.标签 = o.def.全名; item.操控者 = p; item.card = o;
   item.目标 = 选中目标; item.目标槽 = 目标槽; item.chosenSlot = 阵地; item.chosenModes = 模式们;
-  item.目标规格 = ((o.def.能力?.目标 ?? []) as TargetSpec[]);
+  item.目标规格 = 规格表;
   item.宣告X = 宣告X;
   item.额外牺牲 = 牺牲的;
   item.额外放逐 = 放逐的;
@@ -1260,7 +1292,7 @@ function 打出内(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: �
   item.待完成 = false;
   // 601：这是一次「打出一张牌」—— 记事件，供「每当你打出一张锦囊牌时」那类触发用。
   //   受方 = 那张牌的 uid；数量 = 玩家号（谁是打出者），触发式按 受方/数量 取。
-  记事件(g, '打出牌', { 受方: o.iid, 数量: p, 来源: o.iid });
+  记事件(g, '打出牌', { 打出的牌: 拍LKI(g, o), 打出玩家: p });
   // 048 关平「当关平成为锦囊令符或阵略令符的目标时」—— 同样是「只记了事件、没排队」的缺口
   目标落定(g, item);
   // ⚠ 原来只记事件没排队 —— 067 武侯符阵兵 的「每当你打出锦囊时」从没触发过
@@ -1273,7 +1305,7 @@ function 打出内(g: GameState, p: number, o: Obj, 目标: 目标[], 阵地?: �
 /** 601.1a：开始打出。只把牌放进堆叠，不选模式/目标、不付费。 */
 export function 开始打出(g: GameState, p: number, o: Obj): StackItem | null {
   const 检查 = 能打出(g, p, o);
-  if (!检查.ok) { 记录(g, '不能开始打出：' + (检查.reason ?? o.def.全名)); return null; }
+  if (!检查.ok) { 记录(g, '不能打出：' + (检查.reason ?? o.def.全名)); return null; }
   const item: StackItem = {
     id: g.nextStackId++, 种类: '令符', 标签: o.def.全名, 操控者: p,
     来源: null, card: o, 目标: [], 目标槽: {}, steps: [],
@@ -1436,8 +1468,37 @@ export function 候选目标(g: GameState, 操控者: number, spec: TargetSpec, 
 }
 /** 从选择器的 筛选 里取某属性的值（玩家 / 堆叠项 这类特殊选择器用 ✓） */
 function 取条件(sel: Selector | undefined, 属性: string): string | undefined {
-  const v = (sel?.筛选 ?? []).find((c) => (c as { 属性?: string }).属性 === 属性)?.值;
-  return v === undefined ? undefined : String(v);
+  // 只在顶层的叶子条件里取；或/非节点不参与这类“特殊选择器开关”的读取。
+  const c = (sel?.筛选 ?? []).find((x): x is 筛选条件 => '属性' in x && x.属性 === 属性);
+  return c?.值 === undefined ? undefined : String(c.值);
+}
+
+/** 堆叠项的“种类”条件：令符/牌是堆叠称呼，其它查牌面类别；支持 比较:'不是'。 */
+function 符合堆叠种类(g: GameState, it: StackItem, sel: Selector | undefined): boolean {
+  for (const c of (sel?.筛选 ?? [])) {
+    if (!('属性' in c) || c.属性 !== '种类') continue;
+    const 值们 = Array.isArray(c.值) ? c.值 : [c.值];
+    const 命中 = 值们.some((v) => {
+      if (typeof v !== 'string') return false;
+      return v === '令符' || v === '牌' || (!!it.card && 属于类别(g, it.card, v));
+    });
+    if ((c.比较 ?? '是') === '不是' ? 命中 : !命中) return false;
+  }
+  return true;
+}
+
+/** 堆叠项“目标”属性的匹配：目标列表里是否有满足条件的对象。 */
+function 符合堆叠目标(g: GameState, it: StackItem, c: 筛选条件, 操控者: number): boolean {
+  // 目标只接受嵌套筛选；不再有字符串值写法。
+  if (!c.目标) return false;
+  const 命中 = it.目标.some((t) => {
+    if (typeof t === 'number') {
+      return 符合域({ g, 控制器: 操控者, 锚: it.card ?? null }, t, '玩家', [c.目标!]);
+    }
+    if (!t || typeof t !== 'object' || !('def' in t)) return false;
+    return 符合筛选(g, t, [c.目标!], 有效特征(g, t), undefined, undefined, it.card ?? null, 操控者);
+  });
+  return (c.比较 ?? '是') === '不是' ? !命中 : 命中;
 }
 
 /**
@@ -1445,22 +1506,69 @@ function 取条件(sel: Selector | undefined, 属性: string): string | undefine
  * ⚠ 只在各处的 `abs.forEach(...)` 入口前调用 ✓ —— 判断逻辑一律不用改 ✗：
  *   每个分支拿到的是**只有那一条触发**的能力副本 ✓，原有 `ab.触发.事件/主体/…` 读法照旧 ✓。
  */
-type 单触发能力 = TriggeredAbility & { 触发: Trigger };
-function 展开能力触发(abs: TriggeredAbility[]): { ab: 单触发能力; i: number }[] {
-  const out: { ab: 单触发能力; i: number }[] = [];
-  abs.forEach((ab0, i) => {
-    // ⚠ 关键词能力（`{ 名称:'突击', 数值:2 }`）没有 `种类` —— 先按 702 章展开，
-    //   否则「突击 / 迎击 / 重整」这些**触发式关键词**永远进不了触发队列。
-    const ab = 解析能力(ab0 as unknown as Ability) as unknown as TriggeredAbility;
-    const t = (ab as { 触发?: unknown }).触发;
-    if (t && typeof t === 'object' && Array.isArray((t as { 任一?: unknown }).任一)) {
-      for (const 项 of (t as { 任一: unknown[] }).任一) {
-        out.push({ ab: { ...ab, 触发: 项 as Trigger } as 单触发能力, i });
-      }
-    } else out.push({ ab: ab as 单触发能力, i });
-  });
+function 展开能力触发(abs: TriggeredAbility[]): { ab: TriggeredAbility; i: number }[] {
+  void abs;
+  return [];
+}
+
+/** 新触发核心：按事件数据找匹配的触发式能力；只匹配，不入队。 */
+export function 匹配触发能力(g: GameState, 事件: 触发事件): { 来源: Obj; 能力: TriggeredAbility; 索引: number }[] {
+  const out: { 来源: Obj; 能力: TriggeredAbility; 索引: number }[] = [];
+  const 候选 = [...g.战场];
+  const 其他区域 = [...g.players.flatMap((p) => p.graveyard), ...g.放逐区].filter((o) => !候选.includes(o));
+  const 死者uid = 事件.事件 === '死去' ? 事件.死亡角色?.uid : undefined;
+  for (const o of [...候选, ...其他区域]) {
+    // 死去事件在离场前排队时，死亡单位还在战场；它自己的能力由下面的 LKI 分支处理，别重复。
+    if (o.区域 === '战场' && 死者uid !== undefined && o.uid === 死者uid) continue;
+    if (!有规则叙述(g, o)) continue;
+    const abs = 有效能力列表(g, o) as TriggeredAbility[];
+    abs.forEach((ab, i) => {
+      if (ab.种类 !== '触发式') return;
+      const 触发 = ab.触发;
+      if (!触发) return;
+      const 区域 = ab.生效区域 ?? '战场';
+      if (o.区域 !== 区域) return;
+      const 控 = 区域 === '战场' ? 有效控制器(g, o) : o.owner;
+      const 条: Trigger[] = '任一' in 触发 && Array.isArray(触发.任一) ? 触发.任一 as Trigger[] : [触发 as Trigger];
+      const 命中 = 条.some((t) => 触发匹配(g, t, 事件, o, 控));
+      if (!命中) return;
+      if (ab.条件 && !判断(g, 控, ab.条件, o, undefined, o, 事件)) return;
+      out.push({ 来源: o, 能力: ab, 索引: i });
+    });
+  }
+  // 死去：触发源是死亡前的单位，对着 LKI 匹配，不先按 uid 找当前墓地物件。
+  if (事件.事件 === '死去' && 事件.死亡角色) {
+    const 死 = 事件.死亡角色;
+    const abs = ((死.def.能力?.能力 ?? []) as TriggeredAbility[]);
+    abs.forEach((ab, i) => {
+      if (ab.种类 !== '触发式') return;
+      const 区域 = ab.生效区域 ?? '战场';
+      if (区域 !== '战场') return;                 // 墓地/放逐区能力由上面的当前物件扫描处理
+      const 触发 = ab.触发;
+      if (!触发) return;
+      const 条: Trigger[] = '任一' in 触发 && Array.isArray(触发.任一) ? 触发.任一 as Trigger[] : [触发 as Trigger];
+      const 命中 = 条.some((t) => 触发匹配(g, t, 事件, 死, 死.操控者));
+      if (!命中) return;
+      if (ab.条件 && !判断(g, 死.操控者, ab.条件, 死 as unknown as Obj, undefined, 死 as unknown as Obj, 事件)) return;
+      // 匹配用死前 LKI；真正要执行时仍需要一个当前物件（例如从墓地移回手牌）。
+      const 当前 = 按uid找当前物件(g, 死.uid);
+      if (!当前) return;
+      out.push({ 来源: 当前, 能力: ab, 索引: i });
+    });
+  }
   return out;
 }
+
+/** 新触发核心的入队入口。 */
+export function 入队事件触发(g: GameState, 事件: 触发事件): void {
+  for (const { 来源, 能力, 索引 } of 匹配触发能力(g, 事件)) {
+    g.pending.push({
+      来源, abilityIndex: 索引, 能力, 标签: 来源.def.全名 + ' 的触发',
+      事件, 允许离场: true,
+    });
+  }
+}
+
 function 候选目标内(g: GameState, 操控者: number, spec: TargetSpec, 锚: Obj | null, 是目标 = true,
   触发受方?: Obj | number,
   记忆源?: Obj): 候选[] {
@@ -1482,16 +1590,18 @@ function 候选目标内(g: GameState, 操控者: number, spec: TargetSpec, 锚:
     }
     if (取条件(sel, '区域') === '堆叠') {
       for (const it of g.stack) {
+        // 堆叠项自己的目标列表（StackItem.目标）
+        const 目标条件 = (sel.筛选 ?? []).filter((c): c is 筛选条件 => '属性' in c && c.属性 === '目标');
+        if (目标条件.length && !目标条件.every((c) => 符合堆叠目标(g, it, c, 操控者))) continue;
         // 114.9：能力不是令符（113.1）—— 默认不列，卡面写「或能力」时才列
         if (!it.card || it.种类 !== '令符') {
           if (!!取条件(sel, '含堆叠能力') && it.种类 !== '令符') out.push({ obj: null, 玩家: null, 堆叠项: it.id });
           continue;
         }
-        // 之前漏了 种类 / 非种类 的判断（无懈可击写的是「非领土牌」）
-        // ⚠「令符」「牌」是「在堆叠上」的**称呼**，不是 def.类别 里的值（冷箭的类别是「锦囊」），
-        //   所以这两个值对堆叠项直接算通过；其它 种类 才去查牌面类别。
-        if (取条件(sel, '种类') && 取条件(sel, '种类') !== '令符' && 取条件(sel, '种类') !== '牌' && !属于类别(g, it.card, 取条件(sel, '种类') ?? '')) continue;
-        if (取条件(sel, '非种类') && 属于类别(g, it.card, 取条件(sel, '非种类') ?? '')) continue;
+        // 「令符」「牌」是堆叠上的称呼，不是 def.类别；其它 种类 才查牌面类别。
+        if (!符合堆叠种类(g, it, sel)) continue;
+        // 115.5：堆叠上的令符不是其本身的合法目标
+        if (是目标 && 锚 === it.card) continue;
         out.push({ obj: it.card, 玩家: null });
       }
       continue;
@@ -1518,12 +1628,13 @@ function 候选目标内(g: GameState, 操控者: number, spec: TargetSpec, 锚:
     if (是目标 && 有词(g, o, '洞察') && 有效控制器(g, o) !== 操控者) continue;
       // 702.2b：具有某<特征>抵抗的实体，不能成为具该特性之令符/能力的目标
       if (是目标 && 抵抗挡得住目标(g, o, 锚 ?? null)) continue;
-      // 702.5a + 306.4a：数术的附属能力**限制它打出时的目标**
+      // 702.5a：附属能力自己带的特征也参与目标限制。
       {
-        const 附 = 锚 ? 关键词特征(g, 锚, '附属') : undefined;
-        if (附 && !符合筛选(g, o, 附, 有效特征(g, o))) continue;
+        const 附 = 锚 ? 有效特征(g, 锚).关键词.find((k) => k.名称 === '附属') : undefined;
+        const f = 有效特征(g, o);
+        if (附?.特征 && !符合筛选(g, o, 附.特征, f)) continue;
+        if (!符合选择器(g, o, sel, 锚 ?? null, 操控者, f, 触发受方, 记忆源)) continue;
       }
-      if (!符合选择器(g, o, sel, 锚 ?? null, 操控者, 有效特征(g, o), 触发受方, 记忆源)) continue;
       // ⚠ 除:'self' 由 符合选择器 处理（它只排除**锚自己**）。
       //   这里原来无条件 continue，会把「除自身外」整组跳空 —— 导致 受锁定=[] 效应全失效。
       out.push({ obj: o, 玩家: null });
@@ -1582,7 +1693,7 @@ function 目标落定(g: GameState, item: StackItem): void {
   const 来源 = item.来源 ?? item.card ?? null;
   if (!来源) return;
   for (const t of 新目标) {
-    if (typeof t !== 'number' && !('堆叠项' in t)) 记事件(g, '被指定为目标', { 受方: (t as Obj).iid, 来源: 来源.iid });
+    if (typeof t !== 'number' && !('堆叠项' in t)) 记事件(g, '被指定为目标', { 目标: 拍LKI(g, t as Obj), 指定来源: 拍LKI(g, 来源) });
   }
   排队被指定为目标触发(g, 新目标, 来源);
 }
@@ -1618,7 +1729,7 @@ function 目标仍合法(g: GameState, item: StackItem): boolean {
  * **614 的一个替代性效应**：「以**横置**状态进场」。
  * 规则上它把「进场」这个事件替换成「横置着进场」，所以**属于 进战场 这个动作**。
  * 两个来源：
- *   ① 牌自己的固有属性 —— CardDef.横置进场（「这张牌须横置进场」），**对所有入场路径生效**
+ *   ① 牌自己的静止式替代 —— 能力里的 `替代` + `进场横置: true`，**对所有入场路径生效**
  *   ② 本次的效应指定 —— 例如【韩浩】「将之横置放进战场」
  */
 export interface 进场替代 { 横置?: boolean; 面?: '明置' | '暗置'; 附属在?: number }
@@ -1712,7 +1823,7 @@ function 进场本体(g: GameState, o: Obj, 操控者: number, 阵地: 阵地 | 
     加标记(g, o, { 类型: '灵值', 数量: o.def.灵值!, 时间印记: g.nextStamp++ });
   }
   // 614：「以横置状态进场」—— 替代性效应在这里检查并执行（牌自己的属性 + 本次指定）
-  if ((o.def.横置进场 || 替代?.横置) && o.面 === '明置') {
+  if (替代?.横置 && o.面 === '明置') {
     写横置(g, o, true);
     排队单位事件触发(g, '成为横置', o);
     记录(g, o.def.全名 + ' 横置进场（614）');
@@ -1730,8 +1841,8 @@ function 排队迎击(g: GameState, 守: Obj, 进入者: Obj): void {
     const n = typeof 原 === 'number' ? 原 : Number(名.slice(2));
     if (!Number.isFinite(n) || n <= 0) continue;
     g.pending.push({
-      来源: 守, abilityIndex: -1, 标签: 触发标签(守, '迎击' + n),
-      允许离场: true, 事件: { 受方: 进入者 },
+      来源: 守, abilityIndex: -1, 标签: 触发标签(守, '迎击' + n), 允许离场: true,
+      事件: { 事件: '进入相对阵地', 进入角色: 进入者 },
       能力: {
         种类: '触发式', 触发: { 事件: '进入相对阵地' },
         效应: [{ 操作: '伤害', 来源: '自身', 事件: [{ 受方: { ref: '触发受方' }, 点数: n }] }],
@@ -1754,7 +1865,7 @@ export function 进战场(g: GameState, o: Obj, 操控者: number, 阵地: 阵�
   // 614.1a：有「进场横置」的替代效应 → 改成横置进场（109）
   if (!替代?.横置 && 进场须横置(g, o, 操控者)) 替代 = { ...(替代 ?? {}), 横置: true };
   进场本体(g, o, 操控者, 阵地, 替代);
-  记事件(g, '进战场', { 受方: o.iid });
+  记事件(g, '进战场', { 进场角色: 拍LKI(g, o) });
   排队进战场触发(g, o);
   迎击检查(g, o, 阵地, 操控者);
 }
@@ -1769,7 +1880,7 @@ export function 进战场(g: GameState, o: Obj, 操控者: number, 阵地: 阵�
 export function 批量进战场(g: GameState, 项: { 对象: Obj; 操控者: number; 阵地: 阵地 | null; 替代?: 进场替代 }[]): Obj[] {
   for (const x of 项) 进场本体(g, x.对象, x.操控者, x.阵地, x.替代);
   for (const x of 项) {
-    记事件(g, '进战场', { 受方: x.对象.iid });
+    记事件(g, '进战场', { 进场角色: 拍LKI(g, x.对象) });
     排队进战场触发(g, x.对象);
   }
   for (const x of 项) 迎击检查(g, x.对象, x.阵地, x.操控者);
@@ -1931,7 +2042,7 @@ export function 实际打出费用(g: GameState, p: number, card: CardDef | Obj)
     for (const ab of (def.能力?.能力 ?? []) as StaticAbility[]) {
       if (ab.种类 !== '静止式') continue;
       if (ab.条件 && !判断(g, p, ab.条件, { def } as Obj)) continue;
-      for (const e of ab.效应 ?? []) if ('类别' in e && e.类别 === '自身费用修正') 试一条(e.修正, p);
+      for (const e of ab.效应 ?? []) if ('作用点' in e && e.作用点 === '费用' && e.费用类型 === '自身') 试一条(e.修正, p);
     }
   }
   return Math.max(0, 总);
@@ -1973,7 +2084,7 @@ export function 获得操控权时移动(g: GameState, o: Obj, 新操控者: num
   if (空) {
     写阵地(g, o, 空); g.players[新操控者]!.阵地[空] = o;
     迎击检查(g, o, 空, 新操控者);
-    if (旧阵地) { 记事件(g, '移动', { 受方: o.iid }); 排队移动触发(g, o); }   // 701.22b：换操控权导致的换阵地算移动
+    if (旧阵地) { 记事件(g, '移动', { 移动角色: 拍LKI(g, o) }); 排队移动触发(g, o); }   // 701.22b：换操控权导致的换阵地算移动
     记录(g, '301.8：' + o.def.全名 + ' 移到 ' + g.players[新操控者]!.name + ' 的 ' + 空);
   } else {
     写阵地(g, o, null);
@@ -2067,7 +2178,7 @@ export function 玩家限制清单(g: GameState, p: number): { 禁止: 玩家动
 function 拍LKI(g: GameState, o: Obj): import('./state.js').LKI {
   const f = 有效特征(g, o);
   return { iid: o.iid, uid: o.uid, def: o.def, 区域: o.区域, 操控者: 有效控制器(g, o), 拥有者: o.owner,
-    阵地: o.阵地, 名称: f.名称, 类别: f.类别, 副类别: f.副类别, 超类别: f.超类别,
+    阵地: o.阵地, 名称: f.名称, 类别: f.类别, 副类别: f.副类别, 超类别: f.超类别, 势力: f.势力,
     武力: 是类别(g, o, '单位') ? f.武力 : null, 体力上限: 是类别(g, o, '单位') ? f.体力上限 : null,
     关键词: f.关键词, damage: o.damage, tapped: o.tapped, 面: o.面, 标记: [...o.标记], 时间印记: o.时间印记 };
 }
@@ -2165,11 +2276,72 @@ export function 移到区域(g: GameState, o: Obj, 目的地: Zone): void {
 export function 置入墓地(g: GameState, o: Obj): void {
   const 曾在战场 = o.区域 === '战场';
   const 旧阵地 = o.阵地;        // ⚠ 必须在 移到区域 之前取（它会清 o.阵地）
+  // 700.4：从战场进墓地才是“死去”；死去替代必须在真正移区之前。
+  if (曾在战场 && 尝试死去替代(g, o)) return;
+  const 死亡快照 = 曾在战场 ? 拍LKI(g, o) : undefined;
+  // 603.2：事件发生的那一刻就触发；不能等离场清理/704.5l 把附属关系清掉后再判。
+  if (曾在战场) {
+    o.lastKnown = 死亡快照;
+    记事件(g, '死去', { 死亡角色: 死亡快照! });
+    排队死去触发(g, o, 旧阵地);
+  }
   移到区域(g, o, '墓地');      // 400.7：区域改变全部走这里（以前是手写三件套）
-  const pl = g.players[o.owner]!;
   // 700.4：「死去」= 从战场进入墓地。**只有从战场进墓地才算**（令符结算进墓地不是死去）
-  记事件(g, 曾在战场 ? '死去' : '离开战场', { 受方: o.iid });
-  if (曾在战场) 排队死去触发(g, o, 旧阵地);
+  if (!曾在战场) 记事件(g, '离开战场', { 离场角色: o.lastKnown ?? 拍LKI(g, o) });
+}
+
+/** 死去事件是否被替代；替代成功返回 true，调用方不能再置入墓地。 */
+function 尝试死去替代(g: GameState, o: Obj): boolean {
+  const 应用 = (r: ReplacementSpec, 控制器: number): boolean => {
+    if (r.略过) { 记录(g, (r.说明 ?? '替代效应') + '：略过死去事件'); return true; }
+    if (!r.应用?.length) return false;
+    记录(g, (r.说明 ?? '替代效应') + '：改为其它事件（原死去事件从未发生）');
+    const 假项: StackItem = {
+      id: g.nextStackId++, 种类: '触发式', 标签: r.说明 ?? '死去替代',
+      操控者: 控制器, 来源: o, card: null, 目标: [], 目标槽: {}, steps: r.应用,
+    };
+    for (const st of r.应用) 执行一步(g, 假项, st);
+    return true;
+  };
+  // 战场上的静止式替代
+  for (const 源 of [...g.战场]) {
+    if (!有规则叙述(g, 源)) continue;
+    const 控 = 有效控制器(g, 源);
+    for (const ab of 有效能力列表(g, 源) as StaticAbility[]) {
+      if (ab.种类 !== '静止式' || (ab.条件 && !判断(g, 控, ab.条件, 源))) continue;
+      for (const e of ab.效应 ?? []) {
+        if (!('类别' in e) || e.类别 !== '替代') continue;
+        const 替 = e as ReplacementSpec;
+        if (替.替代.事件 !== '死去') continue;
+        const 受 = 替.替代.受方 ?? '自身';
+        if (受 === '自身' && o !== 源) continue;
+        if (受 === '你') continue;
+        if (typeof 受 === 'object' && !符合选择器(g, o, 受.selectAll, 源, 控, 有效特征(g, o))) continue;
+        if (替.条件 && !判断(g, 控, 替.条件, o)) continue;
+        if (应用(替, 控)) return true;
+      }
+    }
+  }
+  // 有限期/持续的替代（持续 op 的载荷）
+  for (const c of [...g.连续效应]) {
+    const r = c.载荷.替代;
+    if (!r || r.替代.事件 !== '死去') continue;
+    if (c.条件 && !判断(g, c.控制器, c.条件 as Condition, c.来源 ?? undefined, undefined, c.来源 ?? undefined)) continue;
+    const 受方判断 = (): boolean => {
+      if (c.指定 !== undefined) return o.iid === c.指定;
+      if (c.受锁定) return c.受锁定.includes(o.iid);
+      if (c.范围) return 符合选择器(g, o, c.范围, c.来源, c.控制器, 有效特征(g, o));
+      return o === c.来源;
+    };
+    const 受 = r.替代.受方 ?? '自身';
+    if (受 !== '任意' && !受方判断()) continue;
+    if (受 === '自身') { if (!受方判断()) continue; }
+    else if (受 === '你') continue;
+    else if (typeof 受 === 'object' && !符合选择器(g, o, 受.selectAll, c.来源, c.控制器, 有效特征(g, o))) continue;
+    if (r.条件 && !判断(g, c.控制器, r.条件, o, undefined, c.来源 ?? undefined)) continue;
+    if (应用(r, c.控制器)) return true;
+  }
+  return false;
 }
 
 /**
@@ -2181,56 +2353,17 @@ export function 置入墓地(g: GameState, o: Obj): void {
  * 「你」= 来源的**有效操控者**（613.1b），和连续效应、启动式的 条件 同一个口径。
  */
 function 触发条件成立(g: GameState, 来源: Obj, ab: TriggeredAbility): boolean {
-  // 触发 可能是 { 任一: Trigger[] }（602.1 那种任一触发）—— 每条子触发各自的条件都成立才算
-  const 条 = '任一' in ab.触发 ? ab.触发.任一 : [ab.触发];
-  const 控制器 = 有效控制器(g, 来源);
-  return 条.every((t) => !t.条件 || 判断(g, 控制器, t.条件, 来源));
+  return false;
 }
 
 export function 排队死去触发(g: GameState, o: Obj, 位置?: 阵地 | null): void {
-    // ⚠ 「它自己的死去触发」走通用广播 ✓（扫全场、按卡面 主体 判 ✓）；
-  //   「另一个」（主体是选择器）也由这一次广播负责 —— 扫描范围 = 战场 ∪ {受体} ✓
-    排队单位事件触发(g, '死去', o, { 允许离场: true, 死者位置: 位置 ?? null, 事件受方: o });
-    if (false) {   // 旧的自身扫描（保留结构、不再执行 ✓）
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      // ⚠ 只有 主体 = '自身'（或没写）的才是「它自己的死去触发」。
-      //   以前这里写的是 `!== '所佩带'` —— 于是「看着别人死去」的能力（156 亡国哀民）
-      //   也被排了一次「它自己的死去触发」，界面上就多出一条（而且会双重结算）。
-  //   「另一个」= 主体是选择器，由 排队单位事件触发 的选择器分支排（数据要写 除:'自身'）✓
-      if (ab.种类 === '触发式' && ab.触发.事件 === '死去' && (ab.触发.主体 ?? '自身') === '自身') {
-        if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-        g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '死去触发'), 允许离场: true, 事件: { 受方: o, 死者位置: 位置 } });
-      }
-    });
-  }
-  // 「当**佩带此装备的单位**死去时」（178 倚天剑）—— 能力挂在**装备/数术**上，
-  //   而死的是它所佩带/附属的那个单位，所以要**反过来**扫场上的装备与数术。
-    // ★ 603.6f：优先用【离场那一刻】的快照 ✓（关系字段此时已被 离场清理 清掉 ✗）
-    const 快照 = (o as unknown as { 离场挂载?: Obj[] }).离场挂载;
-    for (const x of (快照 ?? [...g.战场])) {
-    if (x === o || !有规则叙述(g, x)) continue;
-    const abs = (x.def.能力?.能力 ?? []) as TriggeredAbility[];
-  展开能力触发(abs).forEach(({ ab, i: k }) => {
-
-      if (ab.种类 !== '触发式' || ab.触发.事件 !== '死去') return;
-      const 主体 = ab.触发.主体 ?? '自身';
-      if (主体 !== '所佩带' && 主体 !== '所附属') return;
-      // 关系存在**装备/数术**身上（佩带在 / 附属在 存的是那个**单位**的 iid），所以比的是 o.iid
-      const 挂 = 主体 === '所佩带' ? x.佩带在 : x.附属在;
-    if (!快照 && 挂 !== o.iid) return;   // 快照里已经只剩挂在它身上的物件 ✓
-      if (!触发条件成立(g, x, ab)) return;   // 「若…」不成立就不触发
-      g.pending.push({ 来源: x, abilityIndex: k, 标签: 触发标签(x, 主体 + '死去触发'), 允许离场: true, 事件: { 受方: o, 死者位置: 位置 } });
-    });
-  }
+  void 位置;
+  排队单位事件触发(g, '死去', o, { 事件受方: o });
 }
 
 // ── 触发式能力 ───────────────────────────────────────────────────
 export function 排队进战场触发(g: GameState, o: Obj): void {
-  扫守望(g, '进战场', o);            // 603.7：延迟触发（138 谎报）在这条路上
-  // ⚠ **走通用广播** ✓ —— 不再手写「只认自身」那一段 ✗（手写枚举就是漏掉
-  //   「当另一个单位进场时」的原因 ✓：甘宁第二条形同不存在 ✓）。
-  //   通用那条会自己判：自身 ✓ / 选择器（另一个 / 种类 / 操控者 / 筛选）✓。
+  扫守望(g, '进战场', o);
   排队单位事件触发(g, '进战场', o);
 }
 /**
@@ -2238,13 +2371,9 @@ export function 排队进战场触发(g: GameState, o: Obj): void {
  * ⚠ 判的是**来源**（那个令符）—— 用 `触发.筛选来源`；`触发.筛选` 判的是受方（= 这个物件本身）。
  */
 export function 排队被指定为目标触发(g: GameState, 受方们: 目标[], 来源obj: Obj | null): void {
-  if (!来源obj) return;
-  // ⚠ 走通用广播 ✓（以前自己扫一遍 ✗，而且不认 主体/筛选 ✗）。
-  //   受体 = **被指定的那个物件**（卡面写「当此物成为目标时」✓）；来源单独传进去判 筛选来源 ✓。
   for (const t of 受方们) {
-    if (typeof t === 'number' || !('uid' in t)) continue;
-    const 物件 = g.战场.find((x) => x.iid === (t as { iid: number }).iid);
-    if (物件) 排队单位事件触发(g, '被指定为目标', 物件, { 事件受方: 物件 }, 来源obj);
+    if (typeof t === 'number' || '堆叠项' in t) continue;
+    排队单位事件触发(g, '被指定为目标', t as Obj, { 事件受方: t as Obj }, 来源obj);
   }
 }
 
@@ -2253,59 +2382,27 @@ export function 排队被指定为目标触发(g: GameState, 受方们: 目标[]
  * 受方是**玩家号**或**物件** —— 触发用 触发.受方 区分是哪一类
  * （058 仁者的大德那两条就是这个差别）。
  */
-export function 排队回复体力触发(g: GameState, 受方: number | Obj): void {
-  // 701/119.2：回复体力的触发。受方是**玩家**时不是「单位事件」✗ → 仍按玩家扫描 ✓；
-  //   受方是**物件**时走通用广播 ✓（主体选择器 / 筛选 自动有 ✓）。
-  if (typeof 受方 === 'number') {
-    for (const o of [...g.战场]) {
-      if (!有规则叙述(g, o)) continue;
-      const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-      展开能力触发(abs).forEach(({ ab, i }) => {
-        if (ab.种类 !== '触发式' || ab.触发.事件 !== '回复体力') return;
-        if (ab.触发.受方 === '实体') return;
-        if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-        g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '回复体力触发'), 事件: { 受方 } });
-      });
-    }
-    return;
-  }
-  排队单位事件触发(g, '回复体力', 受方, { 事件受方: 受方, 受方类型: '实体' });
+export function 排队回复体力触发(g: GameState, 受方: number | Obj, 数量 = 0): void {
+  if (typeof 受方 === 'number') 入队事件触发(g, { 事件: '玩家回血', 回复玩家: 受方, 回复数量: 数量 });
+  else 排队单位事件触发(g, '单位回血', 受方, { 事件受方: 受方, 数量 });
 }
 /**
  * 「每当<来源>对…造成伤害时」（033 徐晃「对**玩家**造成伤害」/ 702.14 斩获那类）。
  * ⚠ 判的是**来源**（谁造成的）—— 和 排队受到伤害触发 正好相反：
  *   那个遍历「被打的物件自己有没有受到伤害触发」，这个遍历全场、看谁的「造成伤害」触发成立。
  */
-export function 排队造成伤害触发(g: GameState, 源: Obj, 受方: number | Obj | undefined, 量: number): void {
-  const 对玩家 = typeof 受方 === 'number';
-  for (const o of [...g.战场]) {
-    if (!有规则叙述(g, o)) continue;                 // 709.2a
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      if (ab.种类 !== '触发式' || ab.触发.事件 !== '造成伤害') return;
-      const 主体 = ab.触发.主体 ?? '自身';
-      // 305.5a / 306.4k：能力挂在**装备或数术**上，看的是「**所佩带/所附属**的那个单位」做的事
-      if (主体 === '所佩带' && o.佩带在 !== 源.iid) return;
-      if (主体 === '所附属' && o.附属在 !== 源.iid) return;
-      if (主体 === '自身' && o !== 源) return;            // 「当徐晃造成伤害时」
-      // 其余 = **选择器**（「当某个…造成伤害时」）：事件里的物件是**来源**，锚是能力所在的物件 ✓
-      //   主体 不是 '自身' 就**本来就是「另一个」** → 数据里的 `除:'自身'` `除:'自身'` ✓（数据不写 ✓）
-      if (typeof 主体 !== 'string'
-        && !符合选择器(g, 源, 主体, o, 有效控制器(g, o), 有效特征(g, 源))) return;
-      // 033 徐晃「对**玩家**造成伤害」—— 通用判据 触发.受方（原来是一个一次性的 对玩家 字段）
-      if (ab.触发.受方 !== undefined && ab.触发.受方 !== (对玩家 ? '玩家' : '实体')) return;
-      // 「对另一个单位造成伤害」—— 触发.筛选 判的是**受方**；锚 = 伤害来源，
-      // 所以 除自身 排除的是「来源打自己」，不是「受方不是李严」。
-      if (ab.触发.筛选) {
-        if (typeof 受方 === 'number' || !受方) return;
-        if (!符合筛选(g, 受方, ab.触发.筛选, 有效特征(g, 受方), undefined, undefined,
-          源, 有效控制器(g, o), 受方)) return;
-      }
-      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '造成伤害触发'), 来源快照: o.lastKnown ?? 拍LKI(g, o),
-      事件: { 受方, 数量: 量, ...(受方 && typeof 受方 !== 'number' ? { 受方快照: 受方.lastKnown ?? 拍LKI(g, 受方) } : {}) } });
-    });
+export function 排队伤害触发(g: GameState, 源: Obj | null, 受方: number | Obj | undefined, 量: number, 战斗伤害 = false): void {
+  if (typeof 受方 === 'number') {
+    入队事件触发(g, { 事件: '对玩家造成伤害', 受伤玩家: 受方, 伤害数量: 量,
+      ...(源 ? { 伤害来源: 源 } : {}), 战斗伤害 });
+  } else if (受方) {
+    入队事件触发(g, { 事件: '对单位造成伤害', 受伤单位: 受方, 伤害数量: 量,
+      ...(源 ? { 伤害来源: 源 } : {}), 战斗伤害 });
   }
+}
+
+export function 排队造成伤害触发(g: GameState, 源: Obj, 受方: number | Obj | undefined, 量: number, 战斗伤害 = false): void {
+  排队伤害触发(g, 源, 受方, 量, 战斗伤害);
 }
 
 /** 603：某个物件受到伤害后，把它自己那些「当此物受到伤害时」的触发放进待触发队列 */
@@ -2318,21 +2415,12 @@ export function 排队造成伤害触发(g: GameState, 源: Obj, 受方: number 
  *   （和 058 仁者的大德「当任一玩家回复体力时」同一个字段）。
  */
 export function 排队玩家受到伤害触发(g: GameState, 玩家: number, 量: number): void {
-  for (const o of [...g.战场]) {
-    if (!有规则叙述(g, o)) continue;                 // 709.2a
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      if (ab.种类 !== '触发式' || ab.触发.事件 !== '受到伤害') return;
-      if (ab.触发.受方 !== '玩家') return;
-      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '玩家受到伤害触发'), 事件: { 受方: 玩家, 数量: 量 } });
-    });
-  }
+  排队伤害触发(g, null, 玩家, 量);
 }
 
 export function 排队受到伤害触发(g: GameState, o: Obj, 量: number, 受方?: number | Obj): void {
-  // ⚠ 以前**只看这一个物件的自身触发** ✗ —— 走通用广播之后，「当另一个单位受到伤害时」也认了 ✓
-  排队单位事件触发(g, '受到伤害', o, { 事件受方: 受方, 数量: 量, 受方类型: '实体' });
+  void 受方;
+  排队伤害触发(g, null, o, 量);
 }
 /** ⚠ **事件广播的唯一实现** ✓ —— 「某个单位身上发生了某事」时，扫全场，
  *  让**每个**永久物按自己的 `触发.主体`（关系 → 字面量；其余 → 选择器）决定要不要触发 ✓。
@@ -2367,9 +2455,10 @@ export const 事件派发: Record<事件名, { 派发在哪: string; 未实现?:
   死去: { 派发在哪: '排队死去触发（通用广播 排队单位事件触发 扫全场）', 派发: (g, o) => 排队死去触发(g, o) },
   离开战场: { 派发在哪: '移动流程里 记事件 ／ 排队移动触发 engine.ts:1447' },
   被指定为目标: { 派发在哪: '排队被指定为目标触发 engine.ts:906 / 3947' },
-  受到伤害: { 派发在哪: '伤害流程 排队受到伤害触发 :2742 / 排队玩家受到伤害触发 :2729' },
-  造成伤害: { 派发在哪: '伤害流程 排队造成伤害触发 engine.ts:2690' },
-  回复体力: { 派发在哪: '排队回复体力触发 engine.ts:2833 / 2838' },
+  对单位造成伤害: { 派发在哪: '伤害流程 记事件' },
+  对玩家造成伤害: { 派发在哪: '伤害流程 记事件' },
+  玩家回血: { 派发在哪: '排队回复体力触发 → 入队事件触发' },
+  单位回血: { 派发在哪: '排队回复体力触发 → 排队单位事件触发' },
   移动: { 派发在哪: '排队移动触发 engine.ts:1447 / 3453 / 3492' },
   明置: { 派发在哪: '排队面触发 engine.ts:520' },
   暗置: { 派发在哪: '排队面触发 engine.ts:520' },
@@ -2378,7 +2467,7 @@ export const 事件派发: Record<事件名, { 派发在哪: string; 未实现?:
   阶段开始: { 派发在哪: '（回合流程：目前卡数据没用）' },
   打出牌: { 派发在哪: '排队事件触发 engine.ts:908' },
   抓牌: { 派发在哪: '排队事件触发 engine.ts:298' },
-  重置: { 派发在哪: '排队关键词触发 engine.ts:1160 / 1756' },
+  重置: { 派发在哪: '（卡数据没用）' },
   弃牌: { 派发在哪: '（卡数据没用）' },
   牺牲: { 派发在哪: '（卡数据没用）' },
   放逐: { 派发在哪: '（卡数据没用）' },
@@ -2397,72 +2486,41 @@ function 触发标签(o: Obj, 后缀: string): string {
   return o.def.全名 + (o.阵地 ? '（' + o.阵地 + '）' : '') + ' 的' + 后缀;
 }
 
-function 排队单位事件触发(g: GameState, 事件: '成为横置' | '进战场' | '移动' | '受到伤害' | '宣告攻击' | '回复体力' | '被指定为目标' | '死去' | '明置' | '暗置', 受体: Obj,
+function 排队单位事件触发(g: GameState, 事件: '成为横置' | '进战场' | '移动' | '宣告攻击' | '单位回血' | '被指定为目标' | '死去' | '明置' | '暗置', 受体: Obj,
   额外?: { 事件受方?: number | Obj; 数量?: number; 允许离场?: boolean; 死者位置?: 阵地 | null;
+    /** 做这个动作的玩家（明置/暗置）；事件字段名按事件写 明置玩家 / 暗置玩家 */
+    施动者?: number;
+    /** 明置/暗置前的 LKI 快照；事件里的 明置角色 / 暗置角色 就存这份数据 */
+    变化前?: LKI;
     /** 这条事件里的受方是**玩家**还是**实体** ✓（`触发.受方` 就是判它 ✓：058「玩家 / 单位」两条同事件触发 ✓） */
     受方类型?: '玩家' | '实体';
     /** 判 主体 选择器 / 触发.筛选 时用这份特征代替当前特征 ✓（明置/暗置：用**变化前**的特征 ✓ 709.2a） */
     特征覆盖?: unknown },
   /** 「事件里的那个来源」（打出牌的那张牌 / 点它的那个能力 ✓）—— 卡面写 触发.筛选来源 时判它 ✓ */
   来源?: Obj | null): void {
-  const 触发名 = 事件 + '触发';   // 日志标签用 ✓
-  // ⚠ **扫描范围要覆盖「事件受体自身」** ✓ —— 它可能**已经不在战场**了 ✗：
-  //   「死去」（700.4）就是典型：`置入墓地()` 先 `移到区域(墓地)` ✓（engine.ts:1462 ✓），
-  //     然后才广播「死去」✓ —— 这时死者已在墓地 ✓ → 只扫 `g.战场` 就**找不到它自己** ✗
-  //     → 郭嘉（039 ✓ 触发:{事件:'死去',主体:'自身'}）那条「当郭嘉死去时…」永远不响 ✓（2026-02 报的 ✓）。
-  //   所以候选 = 战场 ∪ {受体} ✓（受体已在战场时不重复 ✓）。「另一个」（选择器）仍只从战场里找 ✓。
-  const 候选: Obj[] = [...g.战场];
-  if (!候选.includes(受体)) 候选.push(受体);
-  // 603.2：从墓地触发的触发式能力（显式写了 区域:'墓地' 的牌）也要作为来源候选
-  const 有墓地触发 = (o: Obj): boolean => ((o.def.能力?.能力 ?? []) as TriggeredAbility[]).some((a) => {
-    if (a.种类 !== '触发式') return false;
-    const ts = (a.触发 as { 任一?: { 区域?: string }[] }).任一;
-    return Array.isArray(ts) ? ts.some((x) => x.区域 === '墓地') : (a.触发 as { 区域?: string }).区域 === '墓地';
-  });
-  for (const pl of g.players) for (const c of pl.graveyard) {
-    if (!候选.includes(c) && 有墓地触发(c)) 候选.push(c);
+  const 数量 = 额外?.数量 ?? 0;
+  let 数据: 触发事件;
+  switch (事件) {
+    case '明置': 数据 = { 事件, 明置角色: 额外?.变化前 ?? 受体, ...(额外?.施动者 !== undefined ? { 明置玩家: 额外.施动者 } : {}) }; break;
+    case '暗置': 数据 = { 事件, 暗置角色: 额外?.变化前 ?? 受体, ...(额外?.施动者 !== undefined ? { 暗置玩家: 额外.施动者 } : {}) }; break;
+    case '成为横置': 数据 = { 事件, 横置角色: 受体 }; break;
+    case '进战场': 数据 = { 事件, 进场角色: 受体 }; break;
+    case '移动': 数据 = { 事件, 移动角色: 受体 }; break;
+    case '被指定为目标': 数据 = { 事件, 目标: 受体, 指定来源: 来源 ?? null }; break;
+    case '单位回血': 数据 = { 事件, 回复单位: 受体, 回复数量: 数量 }; break;
+
+    case '宣告攻击':
+      数据 = {
+        事件, 攻击者: 受体,
+        ...(typeof 额外?.事件受方 === 'number' ? { 攻击目标玩家: 额外.事件受方 }
+          : 额外?.事件受方 ? { 攻击目标单位: 额外.事件受方 } : {}),
+      };
+      break;
+    case '死去':
+      数据 = { 事件, 死亡角色: 受体.lastKnown ?? 拍LKI(g, 受体) };
+      break;
   }
-  for (const o of 候选) {
-    if (!有规则叙述(g, o)) continue;
-    const 自己 = o === 受体;
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      if (ab.种类 !== '触发式' || ab.触发.事件 !== 事件) return;
-      // 只在指定区域生效：写 墓地 的不会在战场来源上匹配，反之亦然
-      if (ab.触发.区域 && o.区域 !== ab.触发.区域) return;
-      const 主体 = ab.触发.主体 ?? '自身';
-      // ⚠ `触发.受方`（'玩家' / '实体'）：058「当任一玩家回复体力时」与「当一个单位回复体力时」
-      //   是**同一个事件的两种受方** ✓ —— 不判它两条会一起排 ✗。
-      if (额外?.受方类型 && ab.触发.受方 && ab.触发.受方 !== 额外.受方类型) return;
-      // 判这件「主体」时的特征：明置/暗置用**变化前**的 ✓（709.2a）
-      const 筛 = 额外?.特征覆盖 ?? 有效特征(g, 受体);
-      if (typeof 主体 === 'string') {
-        // 字面量 = **关系**：'自身' 看自己；'所附属'/'所佩带' 不归通用广播
-        //   （它们由 排队死去触发 的反向扫场、排队造成伤害触发 单独处理 ✓）
-        if (主体 !== '自身' || !自己) return;
-      } else {
-        // 其余一律是**选择器** ✓ —— 用**现成的** 符合选择器 判（和选目标/筛选同一套，不另写匹配 ✗）：
-        //   锚 = 这个永久物（能力来源）→ 「另一个」由数据里的 `除:'自身'` 表达 `除:'自身'` 排除来源自己 ✓
-        //   （主体 ≠ '自身' 本来就是「另一个」，**数据不写** ✓）；
-        //   `操控者:'你'` = 和触发器**同一个操控者** ✓；
-        //   `种类` / `筛选` 判受体特征 ✓。
-        if (!符合选择器(g, 受体, 主体, o, 有效控制器(g, o), 筛 as 特征类型, 额外?.事件受方)) return;
-        // ⚠ 还有 `触发.筛选`（同一个意思的另一种写法 ✓ 037 陈群的暗置触发用的就是它 ✗）——
-        //   以前各派发自己读 ✗，通用广播只认主体的那套选择器 ✗ → 换过来就会漏筛 ✓。两个都读 ✓。
-        if (ab.触发.筛选 && !符合筛选(g, 受体, ab.触发.筛选, 筛 as never)) return;
-        // 「当某来源指定**另一个**单位为目标时」那种：来源要单独筛 ✓
-        if (ab.触发.筛选来源 && (!来源 || !符合筛选(g, 来源, ab.触发.筛选来源, 有效特征(g, 来源)))) return;
-      }
-      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-      // ⚠ 记下**展开后**的能力：关键词能力（突击/迎击…）本身没有 效应/steps，
-    //   进堆叠时若按 下标 重取原始 def 条目，steps 会是 undefined。
-    g.pending.push({ 来源: o, abilityIndex: i, 能力: ab as unknown as TriggeredAbility, 标签: 触发标签(o, 触发名), 允许离场: true,
-      来源快照: o.lastKnown ?? 拍LKI(g, o),
-      事件: { 受方: 额外?.事件受方 ?? 受体, 数量: 额外?.数量, 死者位置: 额外?.死者位置,
-        受方快照: 受体.lastKnown ?? 拍LKI(g, 受体),
-        ...(受体.lastKnown && 受体.lastKnown.iid !== 受体.iid ? { 原iid: 受体.lastKnown.iid, 新iid: 受体.iid } : {}) } });
-    });
-  }
+  入队事件触发(g, 数据);
 }
 
 /**
@@ -2474,24 +2532,15 @@ function 排队单位事件触发(g: GameState, 事件: '成为横置' | '进战
  *
  * ⚠ 之前给 `打出牌` 只加了 `记事件` 没加这个扫描 —— 067 武侯符阵兵 的触发因此从没发生过。
  */
-export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' | '成为横置' | '观星', 受方: number,
-  /** 事件里的那个物件（打出牌 = 那张牌）——「当你打出**锦囊**令符时」靠 触发.筛选来源 筛它（065） */
+export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' | '观星', 受方: number,
+  /** 事件里的那个物件（打出牌 = 那张牌） */
   事件牌?: Obj): void {
-  for (const o of [...g.战场]) {
-    if (!有规则叙述(g, o)) continue;              // 709.2a：暗置的实体没有规则叙述
-    if (有效控制器(g, o) !== 受方) continue;       // 「你抓一张牌」= 这个永久物的操控者抓的
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      if (ab.种类 !== '触发式') return;
-      if (ab.触发.事件 !== 事件) return;
-      // ⚠ 两种写法都要读 ✓：065 用 `筛选来源` ✓，050/067 用 `触发.筛选`（同一个意思 ✗）。
-      //   以前只读 筛选来源 ✗ → 050/067 的「锦囊」筛选被忽略 ✓ → 打出**任何**牌都会触发 ✗。
-      const 判牌 = (条件?: unknown): boolean => !条件 || (!!事件牌 && 符合筛选(g, 事件牌, 条件 as never));
-      if (!判牌(ab.触发.筛选来源)) return;
-      if (!判牌(ab.触发.筛选)) return;
-      if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, 事件 + '触发'), 事件: { 受方 } });
-    });
+  if (事件 === '抓牌') {
+    入队事件触发(g, { 事件: '抓牌', 抓牌玩家: 受方, 抓牌数量: 1 });
+  } else if (事件 === '打出牌') {
+    入队事件触发(g, { 事件: '打出牌', 打出玩家: 受方, ...(事件牌 ? { 打出的牌: 事件牌 } : {}) });
+  } else {
+    入队事件触发(g, { 事件: '观星', 观星玩家: 受方 });
   }
 }
 
@@ -2501,17 +2550,7 @@ export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' 
  * 「事件: 弃牌」的触发式能力，触发受方记成弃牌者（效应里的「该玩家」就指他）。
  */
  export function 排队弃牌触发(g: GameState, 弃牌者: number, 牌: Obj): void {
-  for (const o of [...g.战场]) {
-    if (!有规则叙述(g, o)) continue;
-    if (有效控制器(g, o) === 弃牌者) continue;      // 只对**对手**的弃牌触发
-    const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-    展开能力触发(abs).forEach(({ ab, i }) => {
-      if (ab.种类 !== '触发式' || ab.触发.事件 !== '弃牌') return;
-      if (!触发条件成立(g, o, ab)) return;
-      g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, '弃牌触发'), 事件: { 受方: 弃牌者 } });
-    });
-  }
-  void 牌;
+  入队事件触发(g, { 事件: '弃牌', 弃牌玩家: 弃牌者, 弃掉的牌: 牌 });
 }
 
 /**
@@ -2523,8 +2562,6 @@ export function 排队事件触发(g: GameState, 事件: '抓牌' | '打出牌' 
  *   「另一个」由数据里的 `除:'自身'` 表达 `除:'自身'` ✓，数据不写 ✓）。
  */
 export function 排队移动触发(g: GameState, 单位: Obj): void {
-  // ⚠ 以前是手写扫描 ✓，而且把「另一个」硬编码成「同操控者」✗（等于替卡面写死了 操控者:'你' ✓）。
-  //   现在走通用广播 ✓：要不要看着别人、看着谁，由卡面 主体 里的选择器说了算 ✓。
   排队单位事件触发(g, '移动', 单位);
 }
 /**
@@ -2535,71 +2572,35 @@ export function 排队移动触发(g: GameState, 单位: Obj): void {
  */
 
 /**
- * 603.7 延迟触发的「谁的回合」：普通触发按有效操控者，延迟触发可能已经离场，
- * 所以要按触发能力自己写的口径算（周泰写明是**拥有者**的下一个准备步骤）。
- */
-function 守望回合匹配(g: GameState, w: GameState['守望'][number]): boolean {
-  const 条 = '任一' in w.能力.触发 ? w.能力.触发.任一 : [w.能力.触发];
-  for (const t of 条) {
-    if (!t.谁的回合 || t.谁的回合 === '任意') continue;
-    const 回合主 = t.谁的回合 === '拥有者'
-      ? w.来源?.owner
-      : (w.来源 ? 有效控制器(g, w.来源) : undefined);
-    if (回合主 !== g.active) return false;
-  }
-  return true;
-}
-
-/**
  * **扫守望者**（603.7 延迟触发）：事件发生了，把登记的延迟触发能力塞进待触发队列。
  *   `受体` = 事件的那个对象（进战场时是那个单位；步骤开始时不传）。
  *   ⚠ 操控者按 603.7d/e：**登记它的那个玩家**（守望.谁的），不是现在的操控者。
  */
 function 扫守望(g: GameState, 事件: '进战场' | '步骤开始', 受体?: Obj, 步骤?: string): void {
+  let 事件数据: 触发事件;
+  if (事件 === '进战场') {
+    if (!受体) return;
+    事件数据 = { 事件: '进战场', 进场角色: 受体 };
+  } else {
+    事件数据 = { 事件: '步骤开始', 步骤 };
+  }
   for (const w of [...g.守望]) {
     if (w.事件 !== 事件) continue;
     if (事件 === '步骤开始' && w.步骤 !== undefined && w.步骤 !== 步骤) continue;
-    if (事件 === '步骤开始' && !守望回合匹配(g, w)) continue;
-    if (受体 && w.操控者 !== undefined && 有效控制器(g, 受体) !== w.操控者) continue;
+    if (w.操控者 !== undefined && 受体 && 有效控制器(g, 受体) !== w.操控者) continue;
+    if (!w.来源) continue;
+    if (w.能力.条件 && !判断(g, w.谁的, w.能力.条件, w.来源, undefined, w.来源, 事件数据)) continue;
     g.pending.push({
-      来源: (w.来源 ?? null) as Obj,
-      abilityIndex: -1, 能力: w.能力, 标签: w.标签, 允许离场: true,
-      事件: { 受方: 受体 },
+      来源: w.来源, abilityIndex: -1, 能力: w.能力, 标签: w.标签,
+      允许离场: true, 操控者: w.谁的, 事件: 事件数据,
     });
     if (w.时长 === '下一次') g.守望 = g.守望.filter((x) => x !== w);
   }
 }
 
 export function 排队步骤触发(g: GameState, 步骤: string): void {
-  扫守望(g, '步骤开始', undefined, 步骤);   // 603.7：延迟触发（123 陈武「下一个结束步骤开始时」）
-  // 702.37 重整：在你的结束步骤开始时，重置此单位并把体力回复至上限
-  if (步骤 === '结束步骤') {
-    // 702.69b 再起：「在下一个结束步骤开始时，将他放逐」
-    // 「你操控的」= 有效控制器是当前回合玩家（战场不按玩家分，现算）
-    const 我控 = g.战场.filter((o) => 有效控制器(g, o) === g.active);
-    for (const o of [...我控]) {
-      if (o.记忆['结束时放逐']) { 记录(g, '再起：' + o.def.全名 + ' 被放逐（702.69b）'); 放逐(g, o); }
-    }
-    for (const o of 我控) 排队关键词触发(g, o, '结束步骤');
-  }
-  for (const o of g.战场) {
-    {
-      const abs = (o.def.能力?.能力 ?? []) as TriggeredAbility[];
-  if (!有规则叙述(g, o)) continue;   // 709.2a：暗置的实体没有规则叙述（这里是双层循环，必须 continue 不能 return）
-      展开能力触发(abs).forEach(({ ab, i }) => {
-        if (ab.种类 !== '触发式') return;
-        if (ab.触发.事件 !== '步骤开始' || ab.触发.步骤 !== 步骤) return;
-        const who = ab.触发.谁的回合 ?? '你';
-        if (who !== '任意') {
-          // 「你的回合」按有效操控者；「拥有者的回合」按拥有者 —— 周泰那种离场后的延迟触发要用后者。
-          const 回合主 = who === '拥有者' ? o.owner : 有效控制器(g, o);
-          if (回合主 !== g.active) return;
-        }
-        if (!触发条件成立(g, o, ab)) return;   // 「若…」不成立就不触发
-        g.pending.push({ 来源: o, abilityIndex: i, 标签: 触发标签(o, 步骤 + '触发') });
-      });
-    }
-  }
+  扫守望(g, '步骤开始', undefined, 步骤);
+  入队事件触发(g, { 事件: '步骤开始', 步骤 });
 }
 
 /** 603.3：把等待的触发式能力放进堆叠 */
@@ -2683,6 +2684,7 @@ function 造触发式堆叠项(
   选择?: { 模式?: number | number[]; 目标?: { 目标名: string; 类型: '实体' | '玩家'; iid?: number; 玩家?: number }[];
     步骤目标?: { 目标名: string; 类型: '实体' | '玩家'; iid?: number; 玩家?: number }[] },
   预选?: { 目标: (Obj | number)[]; 目标槽: Record<string, Obj | number> },
+  操控者?: number,
 ): StackItem | null {
   const 目标: 目标[] = [];
   const 目标槽: Record<string, 目标> = {};
@@ -2690,6 +2692,7 @@ function 造触发式堆叠项(
   let 目标清单: TargetSpec[] = [...(ab.目标 ?? []), ...条件组目标们(g, src, ab.效应 ?? [])];
   let steps: ResolveStep[] = (ab.效应 ?? []) as ResolveStep[];
   let 步骤模式: number[] | undefined;
+  const 能力控制 = 操控者 ?? (ab.生效区域 && ab.生效区域 !== '战场' && src.区域 !== '战场' ? src.owner : src.操控者);
 
   if (ab.模式) {
     const ms = ab.模式;
@@ -2725,7 +2728,7 @@ function 造触发式堆叠项(
     if (!预选) {
       const 控 = 有效控制器(g, src);
       for (const sp of 目标清单) {
-        const 候 = 候选目标(g, 控, sp, src, true, 事件?.受方);
+        const 候 = 候选目标(g, 控, sp, src, true, 事件角色(g, 事件));
         if (候.length < sp.数量.最小) return null;
       }
     }
@@ -2748,13 +2751,13 @@ function 造触发式堆叠项(
   if (预选) {
     for (const v of 预选.目标) 目标.push(v);
     Object.assign(目标槽, 预选.目标槽);
-    return { id: g.nextStackId++, 种类: '触发式', 标签, 操控者: src.操控者,
+    return { id: g.nextStackId++, 种类: '触发式', 标签, 操控者: 能力控制,
       来源: src, card: null, 目标, 目标槽, chosenModes, steps, ...(步骤模式 ? { 步骤模式 } : {}),
       事件, 来源快照: src.lastKnown ?? 拍LKI(g, src),
       ...(步骤目标槽 ? { 步骤目标槽 } : {}) };
   }
   return {
-    id: g.nextStackId++, 种类: '触发式', 标签, 操控者: src.操控者,
+    id: g.nextStackId++, 种类: '触发式', 标签, 操控者: 能力控制,
     来源: src, card: null, 目标: [], 目标槽: {}, 目标规格: 目标清单, 待定目标: 目标清单,
     chosenModes, steps, ...(步骤模式 ? { 步骤模式 } : {}),
     事件, 来源快照: src.lastKnown ?? 拍LKI(g, src),
@@ -2831,7 +2834,7 @@ function 组装宣告决定(g: GameState, src: Obj, ab: TriggeredAbility, 标签
     // 模式自身的条件（例如需要对应势力支持）不成立时不能选
     if (o.条件 && !判断(g, 我, o.条件, src)) return;
     // 700.2b / 603.3c：没有合法目标的模式不能被选（目标**合法与否**是状态属性，这里读一次）
-    if (!(o.目标 ?? []).every((sp) => 候选目标(g, 我, sp, src, true, 事件?.受方).length > 0)) return;
+    if (!(o.目标 ?? []).every((sp) => 候选目标(g, 我, sp, src, true, 事件角色(g, 事件)).length > 0)) return;
     // 模式的目标同样在进堆叠时问（603.3c/603.3d）
     模式候选.push({ 索引: i, 标签: o.标签, 规格: 建规格(g, src, o.目标 ?? [], 事件) });
   });
@@ -2847,7 +2850,7 @@ function 建规格(g: GameState, src: Obj, specs: TargetSpec[], 事件?: 触发�
     目标名: sp.目标名, 数量: sp.数量, ...(sp.标签 ? { 标签: sp.标签 } : {}),
     // ⚠ **必须把来源当锚传进来** ✗ —— 选择器的 `除:'自身'` 判据是 `o === 锚` ✓，
     //   不传锚就等于没排除自己 ✗ →【甘宁】的「另一个」单位会把自己也列进候选 ✓（实测记录 ✓）。
-    候选: 候选目标(g, 我, sp, src, true, 事件?.受方).map((c) => (c.obj
+    候选: 候选目标(g, 我, sp, src, true, 事件角色(g, 事件)).map((c) => (c.obj
       ? { 类型: '实体' as const, iid: c.obj.iid, 名称: c.obj.def.全名, 敌: 有效控制器(g, c.obj) !== 我 }
       : { 类型: '玩家' as const, 玩家: c.玩家!, 名称: g.players[c.玩家!]!.name, 敌: c.玩家 !== 我 })),
   }));
@@ -2885,7 +2888,7 @@ export function* 把待触发放进堆叠G(g: GameState, opts: 时机选项, 步
     for (const t of g.pending) if (t.id === undefined) t.id = g.nextPendingId++;
     const 谁的 = (t: (typeof g.pending)[number]): number | null => {
       const ab = t.能力 ?? ((t.来源.def.能力?.能力 ?? []) as TriggeredAbility[])[t.abilityIndex];
-      return ab && (t.来源.区域 === '战场' || t.允许离场) ? 有效控制器(g, t.来源) : null;
+      return ab && (t.来源.区域 === '战场' || t.允许离场) ? (t.操控者 ?? 有效控制器(g, t.来源)) : null;
     };
     // 603.3b 的**次序**：每位玩家按照「**进攻玩家先做选择**」的顺序放（＝优先权那套 APNAP：
     //   进攻玩家 → 按回合顺序其他人）。所以先把队列按这个次序**稳定**排一遍，
@@ -2950,12 +2953,12 @@ export function* 把待触发放进堆叠G(g: GameState, opts: 时机选项, 步
       g.pending.shift();
       // 有模式 = 模式全非法 → 603.3f 从堆叠移除；无模式 = 进堆叠时不用问任何东西
       if (有模式 && !t.预选) { 记录(g, t.标签 + '：没有可选模式，从堆叠移除（603.3f）'); continue; }
-      const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.事件, undefined, t.预选);
+      const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.事件, undefined, t.预选, t.操控者);
 
       if (it) { for (const v of t.预选?.目标 ?? []) 记目标实例(it, v as 目标); 堆叠加(g, it); 目标落定(g, it); if (ab.限制 === '每回合一次') 记一次触发(g, t.来源, t.abilityIndex); }
       continue;
     }
-    const 答 = yield { 玩家: t.来源.操控者, 时机: opts, 步骤, 决定 };
+    const 答 = yield { 玩家: t.操控者 ?? t.来源.操控者, 时机: opts, 步骤, 决定 };
     g.pending.shift();
     if (!答 || 答.种类 !== '宣告') { 记录(g, t.标签 + '：未宣告，能力从堆叠移除'); continue; }
     /**
@@ -2975,7 +2978,7 @@ export function* 把待触发放进堆叠G(g: GameState, opts: 时机选项, 步
       if (规格们.length) {
         const 控0 = 有效控制器(g, t.来源);
         if (!能填满所有槽(g, 控0, 规格们, t.来源)) { 记录(g, t.标签 + '：没有合法目标，从堆叠移除（603.3f）'); continue; }
-        const 答2 = yield { 玩家: t.来源.操控者, 时机: opts, 步骤,
+        const 答2 = yield { 玩家: t.操控者 ?? t.来源.操控者, 时机: opts, 步骤,
           决定: { 类型: '宣告', 标签: t.标签, 来源iid: t.来源.iid, 规格: 建规格(g, t.来源, 规格们, t.事件) } };
         if (!答2 || 答2.种类 !== '宣告') { 记录(g, t.标签 + '：未宣告目标，能力从堆叠移除'); continue; }
         目标答 = 答2.目标 ?? [];
@@ -3000,7 +3003,7 @@ export function* 把待触发放进堆叠G(g: GameState, opts: 时机选项, 步
       const 名们 = 预选.目标.map((x) => 目标名(g, x as 目标)).filter((x) => !!x);
       if (名们.length) 记录(g, t.标签 + '：目标 ' + 名们.join('、'));
     }
-    const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.事件, { 模式: 模式们, 步骤目标: 目标答 }, 预选);
+    const it = 造触发式堆叠项(g, t.来源, ab, t.标签, t.事件, { 模式: 模式们, 步骤目标: 目标答 }, 预选, t.操控者);
 
     if (it) { for (const v of 预选.目标) 记目标实例(it, v as 目标); 堆叠加(g, it); 目标落定(g, it); if (ab.限制 === '每回合一次') 记一次触发(g, t.来源, t.abilityIndex); }
   }
@@ -3038,7 +3041,7 @@ export function 结算堆叠顶(g: GameState): boolean {
       if (item.目标.length === 0 && item.待定目标.length > 0) {
         let 挑得齐 = true;
         for (const sp of item.待定目标) {
-          const 候 = 候选目标(g, 控, sp, 锚 as Obj | null, true, item.事件?.受方);
+          const 候 = 候选目标(g, 控, sp, 锚 as Obj | null, true, 事件角色(g, item.事件));
           if (候.length < sp.数量.最小) { 挑得齐 = false; break; }
           const 要 = Math.max(sp.数量.最小, Math.min(sp.数量.最大, 1));
           // 优先敌方（和 自动宣告 的 建规格 同一口径：物件的操控者 / 玩家的座位号）
@@ -3061,7 +3064,7 @@ export function 结算堆叠顶(g: GameState): boolean {
       //   就会照做 ✓（【甘宁】自换位就是这么来的 ✓）。
       if (item.待定目标) {
         const 合法集 = new Set<unknown>();
-        for (const sp of item.待定目标) for (const c of 候选目标(g, 控, sp, 锚 as Obj | null, true, item.事件?.受方)) 合法集.add(c.obj ?? c.玩家);
+        for (const sp of item.待定目标) for (const c of 候选目标(g, 控, sp, 锚 as Obj | null, true, 事件角色(g, item.事件))) 合法集.add(c.obj ?? c.玩家);
         const 前 = item.目标.length;
         item.目标 = item.目标.filter((t) => 合法集.has(t));
         if (item.目标.length !== 前) 记录(g, item.标签 + '：挑中的目标不合法（不在候选里），已剔除');
@@ -3205,12 +3208,15 @@ function 执行步骤(g: GameState, item: StackItem): boolean {
 
         // 候选走 候选目标(…, false)：**关掉抵抗/洞察**，它们只管「不能成为目标」
         // `于` = 候选只从那一叠里挑（查看/展示给出的牌）；再用选择器筛一遍
-        const 候选 = r.于
+        const 候选: { obj: Obj | null; 玩家: number | null }[] = r.于
           ? 解析受方(g, item, r.于).filter((x): x is Obj => typeof x !== 'number')
               .filter((x) => 符合选择器(g, x, r.选, item.来源 ?? null, item.操控者, 有效特征(g, x)))
+              .map((obj) => ({ obj, 玩家: null }))
           : 候选目标(g, item.操控者, { 目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: r.选 }, item.来源 ?? item.card, false)
-              .map((c) => c.obj).filter((x): x is Obj => !!x);
-        if (候选.length === 0) {
+              .map((c) => ({ obj: c.obj, 玩家: c.玩家 ?? null }));
+        const 有效候选 = 候选.filter((c): c is { obj: Obj; 玩家: null } | { obj: null; 玩家: number } =>
+          !!c.obj || typeof c.玩家 === 'number');
+        if (有效候选.length === 0) {
           if (item.可选当前) {
             // 可选动作没有合法对象：候选为空，确认不可用；取消照常。
             item.待选择 = { 类型: '选', 选什么: '物件', 标签: r.标签 ?? '选择',
@@ -3221,8 +3227,11 @@ function 执行步骤(g: GameState, item: StackItem): boolean {
           item.步骤游标++;
           continue;
         }
-        item.待选择 = { 类型: '选', 选什么: '物件', 标签: r.标签 ?? '选择一个物件', 玩家: item.操控者,
-          候选: 候选.map((c) => ({ 键: c.iid, 名称: c.def.全名 })),
+        const 全玩家 = 有效候选.every((c) => !!c.obj === false && typeof c.玩家 === 'number');
+        item.待选择 = { 类型: '选', 选什么: 全玩家 ? '玩家' : '物件', 标签: r.标签 ?? '选择一个物件', 玩家: item.操控者,
+          候选: 有效候选.map((c) => c.obj
+            ? { 键: c.obj.iid, 名称: c.obj.def.全名 }
+            : { 键: '玩家' + c.玩家, 名称: g.players[c.玩家]?.name ?? '玩家' + c.玩家 }),
           数量: r.数量 ?? { 最小: 1, 最大: 1 },
           ...(item.可选当前 ? { 可取消: true } : {}) };
         return false;
@@ -3232,8 +3241,10 @@ function 执行步骤(g: GameState, item: StackItem): boolean {
     if (互动 && item.本次选择 !== undefined) 写到记忆(g, item, 互动.记到, item.本次选择);
     执行一步(g, item, 步骤);
     if (item.待选择) return false;
-    // 公共「记到」：op 把这一步的产物放进 item.产物，这里统一写进记忆
-    if (步骤.记到 !== undefined) 写到记忆(g, item, 步骤.记到, item.产物);
+    // 公共「记到」：op 把这一步的产物放进 item.产物，这里统一写进记忆。
+    // 存到受方 由具体 op 在产物落定后写（伤害必须赶在死亡检查之前），这里不重复写。
+    const 记到受方 = typeof 步骤.记到 === 'object' && 步骤.记到?.存到 === '受方';
+    if (步骤.记到 !== undefined && !记到受方) 写到记忆(g, item, 步骤.记到, item.产物);
     item.产物 = undefined;
     item.步骤游标++;
       // 「这一步的答案用完即弃」—— 留着会被后面的步骤捡走（弃牌 曾把上一步选的领土当手牌弃掉）
@@ -3250,7 +3261,10 @@ export function 应用选择(g: GameState, item: StackItem, 答: Action | null):
   // ⚠ **不要 .map(Number)** —— 键可能是字符串（'接受' 这类选项）。只把数字当 uid 用。
   const 选 = (答 && 答.种类 === '决定' && Array.isArray(答.选)) ? (答.选 as (number | string)[]) : [];
   if (d.类型 === '选' && d.可选确认) {
-    const 做 = !!(答 && 答.种类 === '决定' && 答.接受 === true);
+    // 网页的候选按钮把选择放在 选 里，通用提交还会带 接受:true；
+    // 只看 接受 会把“放弃”误判成“做”。
+    const 拒 = 选.includes('放弃') || !!(答 && 答.种类 === '决定' && 答.接受 === false);
+    const 做 = !拒 && (选.includes('接受') || !!(答 && 答.种类 === '决定' && 答.接受 === true));
     if (item.可选当前) {
       (item.可选结果 ??= {})[item.可选当前.结果] = 做;
       const 结束 = item.可选当前.结束;
@@ -3301,6 +3315,10 @@ export function 应用选择(g: GameState, item: StackItem, 答: Action | null):
     // 答复交给**本步**用：存进 本次选择，游标**不推进** —— 让同一步重跑一遍把它用掉。
     // 键可能是数字（物件 uid）也可能是字符串（'接受' 这类选项）—— 数字才去找物件，其余原样留着。
     const 找 = (键: number | string): Obj | number | string => {
+      if (d.选什么 === '玩家') {
+        const n = typeof 键 === 'number' ? 键 : Number(String(键).replace(/^玩家/, ''));
+        if (Number.isFinite(n)) return n;
+      }
       if (typeof 键 !== 'number') return 键;
       return g.战场.find((x) => x.iid === 键)
         ?? g.players.flatMap((p) => [...p.hand, ...p.library, ...p.graveyard]).find((x) => x.iid === 键)
@@ -3494,7 +3512,7 @@ function 结算令符(g: GameState, item: StackItem): boolean {
     // 708.5 / 614.10a：作为复制进场的替代效应，在进入战场之前选择。
     // 616.1a：牌自己的「横置进场」是自我替代效应，必须在复制替换 def 之前记住，
     // 否则复制到另一个单位后会把原本的进场方式丢掉。
-    const 自身横置 = o.def.横置进场 === true;
+    const 自身横置 = 自身须横置(g, o, p);
     // 708.5 / 616.1f：作为复制进场的替代效应可能**在复制之后又出现** ——
     // 708.9e 的【步骘】先复制【左慈】，而复制到的【左慈】本身又带「作为复制」，
     // 于是还要继续选择，直到没有新的、尚未生效过的复制效应为止。
@@ -3568,14 +3586,15 @@ function 结算令符(g: GameState, item: StackItem): boolean {
   // 305.2：战器同理
   // 牌面写的效应（牌效应 那串 操作）也要执行
   if (o.def.类别.includes('阵略') || o.def.类别.includes('战器')) {
-    // 306.4b：数术/阵略进场时**附属于**它打出时指定的目标
+    // 608.3a：数术令符结算时，按牌声明的目标进战场并附属于它。
+    // 608.3a：按牌声明的目标进战场并附属于它。
     const 首 = item.目标.find((x) => typeof x !== 'number') as Obj | undefined;
     const 玩家目标 = item.目标.find((x) => typeof x === 'number') as number | undefined;
-    // 306.4b：附属目标是**进场状态**，由 进战场 在新实例上、进战场触发之前写入。
-    const 挂 = 首 ? 首.iid : 玩家目标;
+    // 没有附属能力的阵略/战器不写附属关系。
+    const 挂 = 有词(g, o, '附属') ? (首 ? 首.iid : 玩家目标) : undefined;
+    // 附属目标是**进场状态**，由 进战场 在新实例上、进战场触发之前写入。
     进战场(g, o, p, null, 挂 !== undefined ? { 附属在: 挂 } : undefined);
     if (挂 !== undefined) 记录(g, '306.4b：' + o.def.全名 + ' 附属于 ' + (首 ? 首.def.全名 : '玩家' + 挂));
-    // （日志由 附属() 统一记，这里不再重复）
     执行步骤(g, item);
     return !item.待选择;
   }
@@ -3598,28 +3617,35 @@ function 第一个空阵地(g: GameState, p: number): 阵地 | null {
  * 见 `continuous.ts` 里那段递归保护的说明。
  * `记忆源` 是「触发事件量」这类要读谁的问题：读触发来源的记忆，不是当前效应的。
  */
-function 取值(g: GameState, 控制器: number, v: Value, o?: Obj, 记忆源?: Obj, 宣告X?: number): number {
+function 取值(g: GameState, 控制器: number, v: Value, o?: Obj, 记忆源?: Obj, 宣告X?: number, 事件?: 触发事件): number {
   // 108.3a：费用里带 {X} 的牌/能力，效应里的 'X' 就是宣告的那个数（调用方从 item.宣告X 传进来）
   // ⚠ **先判数字** —— 这一步以前被「不是对象就 0」挡在后面，于是条件里的字面量（`>= 2` 的 2）
   //   全被判成 0，整个比较恒真：028/029 那种「只要…就 +N」的层会**无条件生效**。
   if (typeof v === 'number') return v;
   if (v === 'X') return 宣告X ?? 0;          // 108.3a：费用里带 {X} 的牌/能力
   if (!v || typeof v !== 'object') return 0;
+  // 游戏状态字段：数值字段返回数字；其它类型不进数值运算。
+  if ('游戏状态' in v) {
+    const 读 = 读游戏状态(g, v.游戏状态, v.属性);
+    return 读 && typeof 读.值 === 'number' ? 读.值 : 0;
+  }
+  // 当前事件字段：数值字段返回数字；玩家字段返回玩家号；其它类型不进数值运算。
+  if ('事件' in v) {
+    const 读 = 读事件字段(g, 事件, v.事件, v.属性);
+    return 读 && typeof 读.值 === 'number' ? 读.值 : 0;
+  }
   // 历史查询（数值）
   if ('历史' in v) {
     const 条 = v.历史;
-    const 事件们 = g.事件记录.filter((ev) => ev.事件 === 条.事件
-      && (条.时段 !== '本回合' || ev.回合 === g.turn)
-      && (条.时段 !== '上回合' || ev.回合 === g.turn - 1)
-      && (条.时段 !== '本步骤' || (ev.回合 === g.turn && ev.步骤 === g.当前步骤))
-      && (条.谁的 === undefined || ev.受方 === 控制器));
-    if ((条.操作 ?? '数量') === '数量') return 事件们.length;
-    if (条.操作 === '合计' || 条.取 === '事件量') return 事件们.reduce((n, ev) => n + Number(ev.数量 ?? 0), 0);
+    const 元 = 条 as Record<string, unknown>;
+    const 事件们 = 历史事件们(g, 条, undefined, 控制器);
+    if ((元['操作'] ?? '数量') === '数量') return 事件们.length;
+    if (元['操作'] === '合计' || 元['取'] === '事件量') return 历史合计(事件们);
     return 0;
   }
   // 「乘以系数」（107 黄盖「每已损失 1 点体力，便 +2 武力」）—— 递归求内层再乘
-  if (typeof v !== 'number' && '乘以' in v) return 取值(g, 控制器, v.乘以, o, 记忆源, 宣告X) * v.系数;
-  if (typeof v !== 'number' && '加' in v) return 取值(g, 控制器, v.加, o, 记忆源, 宣告X) + v.值;
+  if (typeof v !== 'number' && '乘以' in v) return 取值(g, 控制器, v.乘以, o, 记忆源, 宣告X, 事件) * v.系数;
+  if (typeof v !== 'number' && '加' in v) return 取值(g, 控制器, v.加, o, 记忆源, 宣告X, 事件) + v.值;
   if (typeof v === 'number') return v;
   if ('player' in v) {
     const pl = g.players[控制器]!;
@@ -3693,70 +3719,289 @@ function 取值(g: GameState, 控制器: number, v: Value, o?: Obj, 记忆源?: 
   if ('记忆' in v) return Number(记忆源?.记忆[v.记忆] ?? 0);
   return 0;
 }
+
+/** 事件字段没登记类型时，按运行时值兜底。 */
+function 事件字段类型按值(v: unknown): 字段类型 {
+  if (typeof v === 'number') return '数值';
+  if (typeof v === 'string') return '字符串';
+  if (typeof v === 'boolean') return '布尔';
+  if (Array.isArray(v)) return '字符串集合';
+  return '物件';
+}
+
+/** 游戏状态字段的类型提示；没写的字段按运行时值兜底，不做访问限制。 */
+const 游戏状态字段类型: Record<string, 字段类型> = {
+  active: '玩家',
+  turn: '数值',
+  当前步骤: '字符串',
+  战斗中: '布尔',
+  当前进攻者: '物件',
+  种类: '字符串',
+  玩家: '玩家',
+  阵地: '字符串',
+  进攻者: '物件',
+  操控者: '玩家',
+};
+
+function 读游戏状态(g: GameState, 字段: string, 属性?: string | string[]): { 类型: 字段类型; 值: unknown } | undefined {
+  const 根 = (g as unknown as Record<string, unknown>)[字段];
+  if (根 === undefined || 根 === null) return undefined;
+  const 路径 = 属性 === undefined ? [] : Array.isArray(属性) ? 属性 : [属性];
+  let 当前: unknown = 根;
+  let 末键 = 字段;
+  for (const 键 of 路径) {
+    if (当前 === null || typeof 当前 !== 'object') return undefined;
+    当前 = (当前 as Record<string, unknown>)[键];
+    末键 = 键;
+    if (当前 === undefined || 当前 === null) return undefined;
+  }
+  return { 类型: 游戏状态字段类型[末键] ?? 事件字段类型按值(当前), 值: 当前 };
+}
+
+function 是物件快照(v: unknown): v is LKI {
+  return !!v && typeof v === 'object' && '名称' in v && '类别' in v && '拥有者' in v;
+}
+
+function 关键词名单(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => {
+    if (typeof x === 'string') return x;
+    if (x && typeof x === 'object' && typeof (x as { 名称?: unknown }).名称 === 'string') {
+      return (x as { 名称: string }).名称;
+    }
+    return '';
+  }).filter((x) => x.length > 0);
+}
+
+/** 读一个物件当前（或 LKI）上的属性；属性类型由属性自己决定。 */
+function 取物件属性(g: GameState, 物件: unknown, 属性: 筛选属性): { 类型: 字段类型; 值: unknown } | undefined {
+  if (!物件 || typeof 物件 !== 'object') return undefined;
+  const 快照 = 是物件快照(物件) ? 物件 : null;
+  const 活 = 快照 ? null : (物件 as Obj);
+  const 特 = 活 ? 有效特征(g, 活) : null;
+  const 牌 = 快照 ? 快照.def : 活!.def;
+  switch (属性) {
+    case '类别': return { 类型: '字符串集合', 值: 快照 ? 快照.类别 : 特!.类别 };
+    case '副类别': return { 类型: '字符串集合', 值: 快照 ? 快照.副类别 : 特!.副类别 };
+    case '超类别': return { 类型: '字符串集合', 值: 快照 ? 快照.超类别 : 特!.超类别 };
+    case '势力': return { 类型: '字符串集合', 值: (快照 ? 快照.势力 : 特!.势力) ?? [] };
+    case '名称': return { 类型: '字符串', 值: 快照 ? 快照.名称 : 特!.名称 };
+    case '全名': return { 类型: '字符串', 值: 牌.全名 };
+    case '称号': return { 类型: '字符串', 值: 牌.称号 ?? '' };
+    case '关键词': return { 类型: '字符串集合', 值: 关键词名单(快照 ? 快照.关键词 : 特!.关键词) };
+    case '打出费用': {
+      const 费 = 牌面费用值(牌.打出费用);
+      return { 类型: '数值', 值: 费 === 'X' ? 0 : 费 };
+    }
+    case '伤害': return { 类型: '数值', 值: 快照 ? 快照.damage : 活!.damage };
+    case '灵值': return { 类型: '数值', 值: 牌.灵值 ?? 0 };
+    case '武力': return { 类型: '数值', 值: 快照 ? (快照.武力 ?? 0) : 特!.武力 };
+    case '体力上限': return { 类型: '数值', 值: 快照 ? (快照.体力上限 ?? 0) : 特!.体力上限 };
+    case '区域': return { 类型: '字符串', 值: 快照 ? 快照.区域 : 活!.区域 };
+    case '面': return { 类型: '字符串', 值: 快照 ? 快照.面 : 活!.面 };
+    case '已横置': return { 类型: '布尔', 值: 快照 ? 快照.tapped : 活!.tapped };
+    case '相对阵地为空': {
+      const 阵 = 快照 ? 快照.阵地 : 活!.阵地;
+      const 区 = 快照 ? 快照.区域 : 活!.区域;
+      if (区 !== '战场' || !阵) return { 类型: '布尔', 值: true };
+      const 控 = 快照 ? 快照.操控者 : 有效控制器(g, 活!);
+      const 敌 = g.players[(控 + 1) % g.players.length]!;
+      const 对位 = 相对阵地(阵);
+      return { 类型: '布尔', 值: !对位 || !敌.阵地[对位] };
+    }
+    case '操控者': return { 类型: '玩家', 值: 快照 ? 快照.操控者 : 有效控制器(g, 活!) };
+    default: return undefined;
+  }
+}
+
+/** 直接读当前事件 item 的字段；没有事件、没有字段都是 undefined。 */
+function 读事件字段(
+  g: GameState, 事件: 触发事件 | undefined, 字段: string, 属性?: 筛选属性,
+): { 类型: 字段类型; 值: unknown } | undefined {
+  if (!事件 || typeof 事件.事件 !== 'string') return undefined;
+  const 值 = (事件 as Record<string, unknown>)[字段];
+  if (值 === undefined || 值 === null) return undefined;
+  const 类型 = 取事件字段类型(事件.事件, 字段) ?? 事件字段类型按值(值);
+  if (属性 !== undefined) {
+    if (类型 !== '物件') return undefined;
+    return 取物件属性(g, 值, 属性);
+  }
+  return { 类型, 值 };
+}
+
+/** 条件操作数求值：预定义值 / 事件字段 / 普通数值表达式。 */
+function 条件操作数(
+  g: GameState, 控制器: number, v: 条件值, o?: Obj, item?: StackItem, 事件?: 触发事件,
+): { 类型: 字段类型; 值: unknown } | undefined {
+  if (v === '你') return { 类型: '玩家', 值: 控制器 };
+  if (v === '对手') {
+    const 对手 = g.players.find((p) => p.index !== 控制器)?.index;
+    return 对手 === undefined ? undefined : { 类型: '玩家', 值: 对手 };
+  }
+  if (v === '自身') {
+    const 自身 = o ?? item?.来源 ?? item?.card;
+    return 自身 ? { 类型: '物件', 值: 自身 } : undefined;
+  }
+  if (v === 'X') {
+    return { 类型: '数值', 值: 取值(g, 控制器, v, o, 记忆宿主(item) ?? undefined, item?.宣告X, 事件 ?? item?.事件) };
+  }
+  if (typeof v === 'string') return { 类型: '字符串', 值: v };
+  if (typeof v === 'boolean') return { 类型: '布尔', 值: v };
+  if (Array.isArray(v)) return { 类型: '字符串集合', 值: v };
+  if (v && typeof v === 'object' && '游戏状态' in v) {
+    return 读游戏状态(g, v.游戏状态, v.属性);
+  }
+  if (v && typeof v === 'object' && '事件' in v) {
+    return 读事件字段(g, 事件 ?? item?.事件, v.事件, v.属性);
+  }
+  return { 类型: '数值', 值: 取值(g, 控制器, v as Value, o, 记忆宿主(item) ?? undefined, item?.宣告X, 事件 ?? item?.事件) };
+}
+
+function 条件物件号(v: unknown): number | undefined {
+  if (v && typeof v === 'object' && typeof (v as { uid?: unknown }).uid === 'number') {
+    return (v as { uid: number }).uid;
+  }
+  return undefined;
+}
+
+/** 关系判断里取实例号；LKI 用死前/变化前的 iid，不先找当前物件。 */
+function 关系物件号(v: unknown): number | undefined {
+  if (v && typeof v === 'object' && typeof (v as { iid?: unknown }).iid === 'number') {
+    return (v as { iid: number }).iid;
+  }
+  return undefined;
+}
+
+/** 需要读物件上的关系字段时，才用当前活物件。 */
+function 关系活物件(g: GameState, v: unknown): Obj | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  if (是物件快照(v)) return 按uid找当前物件(g, v.uid);
+  return typeof (v as { iid?: unknown }).iid === 'number' ? v as Obj : undefined;
+}
+
+function 阵地关系成立(g: GameState, 对象: Obj, 锚: Obj, 关系: 物件关系): boolean {
+  if (对象.区域 !== '战场' || 锚.区域 !== '战场' || !对象.阵地 || !锚.阵地) return false;
+  const 控 = 有效控制器(g, 锚);
+  const 自己 = g.players[控]!;
+  const 敌 = g.players[(控 + 1) % g.players.length]!;
+  const 位 = 锚.阵地;
+  let 允许: (Obj | null)[] = [];
+  if (关系 === '相对') {
+    const 对位 = 相对阵地(位);
+    允许 = 对位 ? [敌.阵地[对位]] : [];
+  } else if (关系 === '相邻') {
+    允许 = 相邻阵地(位).map((x) => 自己.阵地[x]);
+  } else {
+    允许 = 斜对阵地(位).map((x) => 敌.阵地[x]);
+  }
+  return 允许.includes(对象);
+}
+
+/** 两个具体物件之间的关系。 */
+function 关系成立(g: GameState, 对象值: unknown, 关系: 物件关系, 锚值: unknown): boolean {
+  const 对象号 = 关系物件号(对象值);
+  const 锚号 = 关系物件号(锚值);
+  if (对象号 === undefined || 锚号 === undefined) return false;
+  switch (关系) {
+    case '所附属': {
+      const 锚 = 关系活物件(g, 锚值);
+      return !!锚 && 锚.附属在 !== undefined && 锚.附属在 === 对象号;
+    }
+    case '附属于': {
+      const 对象 = 关系活物件(g, 对象值);
+      return !!对象 && 对象.附属在 !== undefined && 对象.附属在 === 锚号;
+    }
+    case '所佩带': {
+      const 锚 = 关系活物件(g, 锚值);
+      return !!锚 && 锚.佩带在 !== undefined && 锚.佩带在 === 对象号;
+    }
+    case '佩带于': {
+      const 对象 = 关系活物件(g, 对象值);
+      return !!对象 && 对象.佩带在 !== undefined && 对象.佩带在 === 锚号;
+    }
+    case '自身': return 对象号 === 锚号;
+    case '除自身': return 对象号 !== 锚号;
+    case '相对':
+    case '相邻':
+    case '斜对': {
+      const 对象 = 关系活物件(g, 对象值);
+      const 锚 = 关系活物件(g, 锚值);
+      return !!对象 && !!锚 && 阵地关系成立(g, 对象, 锚, 关系);
+    }
+    default: return false;
+  }
+}
+
+/** 按游戏内类型比较两个条件操作数。 */
+function 条件比较(
+  左: { 类型: 字段类型; 值: unknown },
+  右: { 类型: 字段类型; 值: unknown },
+  比较: 筛选比较,
+): boolean {
+  const l = 左.值, r = 右.值;
+  if (l === undefined || r === undefined) return false;
+  const 左物 = 条件物件号(l), 右物 = 条件物件号(r);
+  if (左物 !== undefined || 右物 !== undefined) {
+    if (左物 === undefined || 右物 === undefined) return false;
+    if (比较 === '是') return 左物 === 右物;
+    if (比较 === '不是') return 左物 !== 右物;
+    return false;
+  }
+  return 比较值(l, 比较, r);
+}
 /**
  * **`Condition` → 真假**（「只要…」「若…」）。与/或/非在这里递归，具体的比较在 `符合一个条件` 那一族。
  * 传进来的 `控制器` 就是条件里「你」的含义 —— 调用方必须给**有效操控者**，别给印制值。
  */
-function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: StackItem): boolean {
-  if (c.操作 === '与') return c.参数.every((x) => 判断(g, 控制器, x, o, item));
-  if (c.操作 === '或') return c.参数.some((x) => 判断(g, 控制器, x, o, item));
-  if (c.操作 === '非') return !判断(g, 控制器, c.参数, o, item);
-  // 306.4b：这个物件是否附属于「目标」槽里的那个东西
-  // 306.4b：这个物件是否附属于某个实体。
-  // ⚠ c.目标 在 持续 操作 结算时已经**解析成实例 iid 字符串**了（见那里的注释）
-  if (c.操作 === '附属在') return o?.附属在 !== undefined && o.附属在 === Number(c.目标);
+function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: StackItem, 来源?: Obj, 事件?: 触发事件): boolean {
+  const 当前事件 = 事件 ?? item?.事件;
+  if (Array.isArray(c)) return c.every((x) => 判断(g, 控制器, x, o, item, 来源, 当前事件));
+  if ('左' in c) {
+    const 左 = 条件操作数(g, 控制器, c.左, o, item, 当前事件);
+    const 右 = 条件操作数(g, 控制器, c.右, o, item, 当前事件);
+    if (!左 || !右) return false;
+    return 条件比较(左, 右, c.比较 ?? '是');
+  }
+  if ('与' in c) return c.与.every((x) => 判断(g, 控制器, x, o, item, 来源, 当前事件));
+  if ('或' in c) return c.或.some((x) => 判断(g, 控制器, x, o, item, 来源, 当前事件));
+  if ('非' in c) return !判断(g, 控制器, c.非, o, item, 来源, 当前事件);
+  // 历史条件：默认判断存在；字段条件由查询自己套。
+  if ('历史' in c) return 发生过(g, o, c.历史, 控制器, 来源 ?? item?.来源 ?? item?.card ?? undefined);
+  // TODO: 记忆条件待重做。赤壁的大火应改为查历史事件。
+  if ('记忆' in c) {
+    const 值 = o?.记忆?.[c.记忆];
+    return c.值 === undefined ? 值 !== undefined && 值 !== false : 值 === c.值;
+  }
+  if ('关系' in c) {
+    const 对象 = 条件操作数(g, 控制器, c.对象, o, item, 当前事件);
+    const 锚 = 条件操作数(g, 控制器, c.锚, o, item, 当前事件);
+    if (!对象 || !锚 || 对象.类型 !== '物件' || 锚.类型 !== '物件') return false;
+    return 关系成立(g, 对象.值, c.关系, 锚.值);
+  }
+  // 默认存在：候选枚举和选择器的筛选走同一条路径。
+  if (!('操作' in c) && '筛选' in c) {
+    const 候 = 候选目标内(g, 控制器, {
+      目标名: '_', 数量: { 最小: 1, 最大: 1 }, 选择: { 筛选: c.筛选 },
+    }, o ?? null, false, 事件角色(g, 当前事件), 记忆宿主(item) ?? undefined);
+    return 候.length > 0;
+  }
+  // 107：势力需求（按支持度检查）
+  if ('势力需求' in c) return 满足势力需求(g, 控制器, c.势力需求);
   // 「如果该单位是女性」这类：读这一步选中的目标，按特征筛
   if (c.操作 === '目标符合') {
     const t = 取目标项(item, c.目标);
     if (!t || typeof t === 'number' || '堆叠项' in t) return false;
     return 符合筛选(g, t as Obj, c.筛选, 有效特征(g, t as Obj));
   }
-  // 统一历史查询：事件 × 角色 × 时段 × 数量 × 谁的 × 筛选
+  // 旧写法：历史查询 + 次数比较。待迁移。
   if (c.操作 === '历史') {
     const 条 = c.查询;
-    const 对象 = 条.对象 ? 解析受方(g, item!, 条.对象)[0] : o;
-    const 目标iid = 对象 && typeof 对象 !== 'number' ? 对象.iid : undefined;
-    const 目标玩家 = typeof 对象 === 'number' ? 对象 : undefined;
-    const 找物 = (iid: number): Obj | undefined =>
-      g.战场.find((x) => x.iid === iid)
-      ?? g.stack.map((s2) => s2.card).find((x): x is Obj => !!x && x.iid === iid)
-      ?? g.players.flatMap((pl) => [...pl.hand, ...pl.library, ...pl.graveyard]).find((x) => x.iid === iid)
-      ?? g.放逐区.find((x) => x.iid === iid);
-    const 事件们 = g.事件记录.filter((ev) => {
-      if (ev.事件 !== 条.事件) return false;
-      if (条.时段 === '本回合' && ev.回合 !== g.turn) return false;
-      if (条.时段 === '上回合' && ev.回合 !== g.turn - 1) return false;
-      if (条.时段 === '本步骤' && (ev.回合 !== g.turn || ev.步骤 !== g.当前步骤)) return false;
-      if (条.角色 && 目标iid !== undefined) {
-        if (条.角色 === '来源' ? ev.来源 !== 目标iid : ev.受方 !== 目标iid) return false;
-      }
-      if (目标玩家 !== undefined && 条.角色 && (条.角色 === '来源' ? ev.来源 !== 目标玩家 : ev.受方 !== 目标玩家)) return false;
-      if (条.数量) {
-        const 数 = ev.数量 ?? 0;
-        const 比 = 条.数量.比较;
-        if (比 === '大于' && !(数 > 条.数量.值)) return false;
-        if (比 === '小于' && !(数 < 条.数量.值)) return false;
-        if (比 === '小于等于' && !(数 <= 条.数量.值)) return false;
-        if (比 === '大于等于' && !(数 >= 条.数量.值)) return false;
-        if (比 === '是' && 数 !== 条.数量.值) return false;
-        if (比 === '不是' && 数 === 条.数量.值) return false;
-      }
-      if (条.谁的 !== undefined || 条.筛选) {
-        if (typeof ev.受方 !== 'number') return false;
-        const o2 = 找物(ev.受方);
-        if (!o2) return false;
-        if (条.谁的 !== undefined) {
-          const 控 = 有效控制器(g, o2);
-          if (条.谁的 === '你' ? 控 !== 控制器 : 控 === 控制器) return false;
-        }
-        if (条.筛选 && !符合筛选(g, o2, 条.筛选)) return false;
-      }
-      return true;
-    });
-    const 操作 = 条.操作 ?? '数量';
+    const 元 = 条 as Record<string, unknown>;
+    const 对象 = 元['对象'] ? 解析受方(g, item!, 元['对象'] as RecipientRef)[0] : o;
+    const 事件们 = 历史事件们(g, 条, 对象 ?? undefined, 控制器);
+    const 操作 = 元['操作'] ?? '数量';
     const 结果 = 操作 === '数量' ? 事件们.length
-      : (操作 === '合计' || 条.取 === '事件量') ? 事件们.reduce((n, ev) => n + Number(ev.数量 ?? 0), 0)
-      : 0;
+      : (操作 === '合计' || 元['取'] === '事件量') ? 历史合计(事件们) : 0;
     if (c.比较) {
       const 比 = c.比较.比较;
       return 比 === '是' ? 结果 === c.比较.值 : 比 === '不是' ? 结果 !== c.比较.值
@@ -3764,21 +4009,6 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
         : 比 === '大于等于' ? 结果 >= c.比较.值 : 结果 <= c.比较.值;
     }
     return 结果 > 0;
-    return 事件们.length > 0;
-  }
-  // 「于对手的回合中」这类 —— 比较的是**当前回合玩家**和这个条件的判定者
-  // 107：势力需求（按支持度检查），和“操控某势力领土”不是一回事
-  if (c.操作 === '势力需求') return 满足势力需求(g, 控制器, { 符号: c.符号 });
-  // 「若你操控魏势力领土」这类（115 蔡文姬等）：场上有没有满足筛选的物件
-  if (c.操作 === '存在') {
-    // 「谁的」不单独判：筛选里写 `操控者:'你'` 就够（控制器 / 锚 已经传下去）
-    const 至少 = c.至少 ?? 1;
-    const 候 = c.于 ? (item ? 解析受方(g, item, c.于).filter((x): x is Obj => typeof x !== 'number') : []) : g.战场;
-    let 数 = 0;
-    for (const x of 候) {
-      if (符合筛选(g, x, c.筛选, undefined, undefined, undefined, o, 控制器)) { 数++; if (数 >= 至少) break; }
-    }
-    return 数 >= 至少;
   }
   // 701.25：判定牌的信息（没判定 / 牌库空 / 已收尾 → false）
   if (c.操作 === '判定属性') {
@@ -3787,7 +4017,7 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
     // 值可以是「某个目标的费用值」（022 狼顾之计「≥ 该令符的费用值」）
     const 解一项 = (v: unknown): string => {
       if (v && typeof v === 'object' && '历史' in (v as Record<string, unknown>)) {
-        return String(取值(g, 控制器, v as Value, o));
+        return String(取值(g, 控制器, v as Value, o, undefined, undefined, 当前事件));
       }
       if (v && typeof v === 'object' && '目标费用' in (v as Record<string, unknown>)) {
         const 名 = String((v as { 目标费用: string }).目标费用);
@@ -3818,15 +4048,22 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
     }
   }
   if (c.操作 === '回合是') {
+    if (c.谁的 === '拥有者') {
+      const 源 = o ?? item?.来源 ?? item?.card;
+      return !!源 && g.active === 源.owner;
+    }
     const 是我 = g.active === 控制器;
     return c.谁的 === '你' ? 是我 : !是我;
   }
-  const l = 取值(g, 控制器, c.left, o), r = 取值(g, 控制器, c.right, o);
-  switch (c.操作) {
-    case '<=': return l <= r; case '<': return l < r;
-    case '>=': return l >= r; case '>': return l > r;
-    case '=': return l === r; default: return l !== r;
+  if (c.操作 === '<=' || c.操作 === '<' || c.操作 === '>=' || c.操作 === '>' || c.操作 === '=' || c.操作 === '!=') {
+    const l = 取值(g, 控制器, c.left, o, undefined, undefined, 当前事件), r = 取值(g, 控制器, c.right, o, undefined, undefined, 当前事件);
+    switch (c.操作) {
+      case '<=': return l <= r; case '<': return l < r;
+      case '>=': return l >= r; case '>': return l > r;
+      case '=': return l === r; default: return l !== r;
+    }
   }
+  return false;
 }
 
 /**
@@ -3837,7 +4074,11 @@ function 判断(g: GameState, 控制器: number, c: Condition, o?: Obj, item?: S
 function 代换目标引用(g: GameState, item: StackItem, sel: Selector | undefined): Selector | undefined {
   if (!sel || !sel.筛选) return sel;
   let 改过 = false;
-  const 筛 = sel.筛选.map((c) => {
+  const 代换节点 = (c: 筛选节点): 筛选节点 => {
+    if ('与' in c) return { 与: c.与.map(代换节点) };
+    if ('或' in c) return { 或: c.或.map(代换节点) };
+    if ('非' in c) return { 非: 代换节点(c.非) };
+    if ('历史' in c) return c;   // 历史查询内部的目标引用暂不代换
     const v = c.值;
     if (!v || typeof v !== 'object' || Array.isArray(v) || !('目标' in v)) return c;
     const t = 取目标项(item, (v as { 目标: string }).目标);
@@ -3846,7 +4087,8 @@ function 代换目标引用(g: GameState, item: StackItem, sel: Selector | undef
     if (typeof 号 !== 'number') return c;
     改过 = true;
     return { ...c, 值: 号 };
-  });
+  };
+  const 筛 = sel.筛选.map(代换节点);
   return 改过 ? { ...sel, 筛选: 筛 } : sel;
 }
 
@@ -3877,13 +4119,93 @@ function 取来源位置(g: GameState, item: StackItem): { 阵地: 阵地 | null
   if (快) return { 阵地: 快.阵地, 操控者: 快.操控者 };
   return null;
 }
+/** 触发事件的参与者：死去事件读专用字段，其他事件先用通用字段。 */
+function 按uid找当前物件(g: GameState, uid: number): Obj | undefined {
+  return g.战场.find((x) => x.uid === uid)
+    ?? g.stack.map((s) => s.card).find((x): x is Obj => !!x && x.uid === uid)
+    ?? g.players.flatMap((pl) => [...pl.hand, ...pl.library, ...pl.graveyard]).find((x) => x.uid === uid)
+    ?? g.放逐区.find((x) => x.uid === uid);
+}
+
+const 触发元字段 = new Set(['事件', '主体', '条件', '筛选', '筛选来源', '战斗', '回复对象']);
+
+/** Trigger 上除元字段外的键，全部按事件字段筛；没有该字段就不匹配。 */
+function 事件筛选命中(g: GameState, 触发: Record<string, unknown>, 事件: 触发事件, 控制器: number): boolean {
+  for (const [键, 期望] of Object.entries(触发)) {
+    if (触发元字段.has(键)) continue;
+    const 实际 = (事件 as Record<string, unknown>)[键];
+    if (实际 === undefined) return false;
+    if (期望 === '你') {
+      if (typeof 实际 !== 'number' || 实际 !== 控制器) return false;
+    } else if (期望 === '对手') {
+      const 对手 = g.players.find((p) => p.index !== 控制器)?.index;
+      if (typeof 实际 !== 'number' || 实际 !== 对手) return false;
+    } else if (实际 !== 期望) return false;
+  }
+  return true;
+}
+
+function 事件数量(e: 触发事件 | undefined): number {
+  return e?.伤害数量 ?? e?.回复数量 ?? e?.抓牌数量 ?? e?.数量 ?? 0;
+}
+
+function 事件角色(g: GameState, e: 触发事件 | undefined): Obj | number | undefined {
+  if (e?.抓牌玩家 !== undefined) return e.抓牌玩家;
+  if (e?.明置角色) {
+    const 明 = e.明置角色;
+    return 是物件快照(明) ? (按uid找当前物件(g, 明.uid) ?? (明 as unknown as Obj)) : 明;
+  }
+  if (e?.暗置角色) {
+    const 暗 = e.暗置角色;
+    return 是物件快照(暗) ? (按uid找当前物件(g, 暗.uid) ?? (暗 as unknown as Obj)) : 暗;
+  }
+  if (e?.横置角色) return e.横置角色;
+  if (e?.进场角色) return e.进场角色;
+  if (e?.移动角色) return e.移动角色;
+  if (e?.目标) return e.目标;
+  if (e?.回复玩家 !== undefined) return e.回复玩家;
+  if (e?.回复单位) return e.回复单位;
+  if (e?.受伤单位) return e.受伤单位;
+  if (e?.受伤玩家 !== undefined) return e.受伤玩家;
+  if (e?.攻击者) return e.攻击者;
+  if (e?.进入角色) return e.进入角色;
+  if (e?.打出玩家 !== undefined) return e.打出玩家;
+  if (e?.观星玩家 !== undefined) return e.观星玩家;
+  if (e?.弃牌玩家 !== undefined) return e.弃牌玩家;
+  if (e?.死亡角色) return 按uid找当前物件(g, e.死亡角色.uid) ?? (e.死亡角色 as unknown as Obj);
+  return undefined;
+}
+
 function 解析受方(g: GameState, item: StackItem, r: any): (Obj | number)[] {
+  if (r && typeof r === 'object' && '游戏状态' in r) {
+    const 读 = 读游戏状态(g, r.游戏状态, r.属性);
+    if (!读) return [];
+    if (读.类型 === '玩家' && typeof 读.值 === 'number') return [读.值];
+    if (读.类型 === '物件') return [读.值 as Obj];
+    return [];
+  }
+  if (r && typeof r === 'object' && '事件' in r) {
+    const 读 = 读事件字段(g, item.事件, r.事件, r.属性);
+    if (!读) return [];
+    if (读.类型 === '玩家' && typeof 读.值 === 'number') return [读.值];
+    if (读.类型 === '物件') return [读.值 as Obj];
+    return [];
+  }
   if (r.ref === '操控者') return [item.操控者];
   if (r.ref === '额外牺牲') return item.额外牺牲 ? [item.额外牺牲] : [];
   if (r.ref === '额外放逐') return item.额外放逐 ? [item.额外放逐] : [];
   if (r.ref === '自身') return item.来源 ? [item.来源] : (item.card ? [item.card] : []);
   // 「该玩家」/「该单位」= 触发这件事的那个受方
-  if (r.ref === '触发受方') return item.事件?.受方 === undefined ? [] : [item.事件?.受方];
+  if (r.ref === '触发受方') {
+    const 受方 = 事件角色(g, item.事件);
+    return 受方 === undefined ? [] : [受方];
+  }
+  if (r.ref === '死亡角色') {
+    const 死 = item.事件?.死亡角色;
+    if (!死) return [];
+    const 当前 = 按uid找当前物件(g, 死.uid);
+    return 当前 ? [当前] : [];
+  }
   // 「记住」下来的受方（玩家号或物件）
     // 「记住」下来的受方（玩家号 / 物件 / **一批物件**）。`查看`/`展示` 的 `记到` 存的是数组
   //   → 这里展开，于是 `移动 to: { 记忆: '顶牌' }` 就是“我刚刚看到那张”，不再按区域重查。
@@ -3939,10 +4261,10 @@ function 解析受方(g: GameState, item: StackItem, r: any): (Obj | number)[] {
   if (r.selectAll) {
     // 统一筛选模型：按选择器里的 种类 分到 玩家域 / 物件域（触发受方/记忆源照旧从 item 来）
     const 条件 = 代换目标引用(g, item, r.selectAll)?.筛选 ?? [];
-    const 种 = 条件.find((c) => String(c.属性) === '种类');
+    const 种 = 条件.find((c): c is 筛选条件 => '属性' in c && String(c.属性) === '种类');
     const 种值 = 种 ? (Array.isArray(种.值) ? 种.值 : [种.值]) : [];
     const 信 = 取来源位置(g, item);
-    const 下 = { g, 控制器: item.操控者, item, 锚: item.来源 ?? item.card ?? null, 触发受方: item.事件?.受方, 记忆源: 记忆宿主(item) ?? undefined, 锚阵地: 信?.阵地, 锚操控者: 信?.操控者 };
+    const 下 = { g, 控制器: item.操控者, item, 锚: item.来源 ?? item.card ?? null, 触发受方: 事件角色(g, item.事件), 记忆源: 记忆宿主(item) ?? undefined, 锚阵地: 信?.阵地, 锚操控者: 信?.操控者 };
     const 全 = 种值.includes('玩家')
       ? 玩家候选(g, item.操控者, 条件)
       : 物件候选(g, 下, 条件);
@@ -3951,9 +4273,9 @@ function 解析受方(g: GameState, item: StackItem, r: any): (Obj | number)[] {
   if (r.随机取) {
     // 145 雷击：从符合条件的一批里**随机**抽 N 个（统一筛选模型；随机源同洗牌）
     const 条件 = 代换目标引用(g, item, r.随机取)?.筛选 ?? [];
-    const 种 = 条件.find((c) => String(c.属性) === '种类');
+    const 种 = 条件.find((c): c is 筛选条件 => '属性' in c && String(c.属性) === '种类');
     const 种值 = 种 ? (Array.isArray(种.值) ? 种.值 : [种.值]) : [];
-    const 下 = { 控制器: item.操控者, item, 锚: item.来源 ?? item.card ?? null, 触发受方: item.事件?.受方, 记忆源: 记忆宿主(item) ?? undefined };
+    const 下 = { 控制器: item.操控者, item, 锚: item.来源 ?? item.card ?? null, 触发受方: 事件角色(g, item.事件), 记忆源: 记忆宿主(item) ?? undefined };
     const 池 = 种值.includes('玩家')
       ? 玩家候选(g, item.操控者, 条件)
       : 物件候选(g, 下, 条件);
@@ -4008,13 +4330,38 @@ function 存记忆(g: GameState, item: StackItem, 键: string, 值: unknown): vo
     return o.damage;
   }
   /** 统一的「记到」写入：默认值 = 本操作产出的东西；规格可写字符串（只给键）或 { 键, 取?, 运算? } */
-  function 写到记忆(g: GameState, item: StackItem, 规格: 记到规格 | undefined, 产物: unknown, 默认运算: '设为' | '追加' = '设为'): void {
+  function 写到记忆(g: GameState, item: StackItem | null, 规格: 记到规格 | undefined, 产物: unknown, 默认运算: '设为' | '追加' = '设为'): void {
     if (规格 === undefined) return;
     const 键 = typeof 规格 === 'string' ? 规格 : 规格.键;
     const 取 = typeof 规格 === 'string' ? undefined : 规格.取;
     const 运算 = typeof 规格 === 'string' ? 默认运算 : (规格.运算 ?? 默认运算);
+    const 存到 = typeof 规格 === 'string' ? undefined : 规格.存到;
+    if (存到 === '受方') {
+      const 受方们 = (Array.isArray(产物) ? 产物 : [产物])
+        .filter((x): x is Obj => !!x && typeof x === 'object' && 'def' in (x as object));
+      for (const o of 受方们) {
+        let 单值: unknown = 取 === '数量' ? 1 : 取 === '玩家号' ? 0 : 取 ? 取物件数值(g, o, 取) : true;
+        if (运算 === '追加') {
+          const 旧 = o.记忆[键];
+          const 列 = Array.isArray(旧) ? [...旧] : (旧 === undefined ? [] : [旧]);
+          列.push(单值);
+          写记忆(g, o, 键, 列);
+          continue;
+        }
+        if (运算 === '加上' || 运算 === '减去' || 运算 === '乘') {
+          const n = Number(单值 ?? 0);
+          const 旧 = 运算 === '乘' ? Number(o.记忆[键] ?? 1) : Number(o.记忆[键] ?? 0);
+          单值 = 运算 === '加上' ? 旧 + n : 运算 === '减去' ? 旧 - n : 旧 * n;
+        }
+        写记忆(g, o, 键, 单值);
+      }
+      return;
+    }
+    if (!item) return;
     let 值 = 产物;
-    if (取 === '玩家号') {
+    if (取 === '数量') {
+      值 = Array.isArray(产物) ? 产物.length : (产物 === undefined || 产物 === null ? 0 : 1);
+    } else if (取 === '玩家号') {
       const 数 = (Array.isArray(产物) ? 产物 : [产物]).filter((x): x is number => typeof x === 'number');
       值 = 数.length === 1 ? 数[0] : 数;
     } else if (取) {
@@ -4037,7 +4384,7 @@ function 存记忆(g: GameState, item: StackItem, 键: string, 值: unknown): vo
 
 /** 120.4：一个伤害事件，多个受方 */
 /** 一条正在被处理的伤害 */
-interface 伤害条目 { 目标: Obj | number; 数量: number; 来源: Obj | null; /** 509.4：是不是战斗伤害（086 大雾要判它） */ 战斗伤害?: boolean; 射击伤害?: boolean }   // 射击伤害见 702.10c（106 蒋钦）
+interface 伤害条目 { 目标: Obj | number; 数量: number; 来源: Obj | null; /** 509.4：是不是战斗伤害（086 大雾要判它） */ 战斗伤害?: boolean; 不能被防止?: boolean; 射击伤害?: boolean }   // 射击伤害见 702.10c（106 蒋钦）
 
 /** 一条适用的替代性/防止性效应 */
 interface 适用效应 {
@@ -4148,7 +4495,7 @@ function 收集伤害替代效应(g: GameState, 条目: 伤害条目): 适用效
     const 替 = c.载荷.替代;
     if (!替) continue;                             // 这条持续效应只有「层」那一半
     // 611.2b「只要…」：条件不成立的持续效应不参与替代/防止（大乔离场后的那条就是这种）
-    if (c.条件 && !判断(g, c.控制器, c.条件 as Condition, c.来源 ?? undefined)) continue;
+    if (c.条件 && !判断(g, c.控制器, c.条件 as Condition, c.来源 ?? undefined, undefined, c.来源 ?? undefined)) continue;
     // 持续效应：**受方对象**是它附着的那个物件（持续 op 带目标时就是那个目标 —— 046 奋迅），
     //   **来源对象**是效应的来源（那张锦囊）。两者常常不是同一个。
     // **受方判断**：这条持续效应作用到哪些物件。三种写法，从具体到一般：
@@ -4267,8 +4614,23 @@ function* 询问伤害替代G(g: GameState, 条目: 伤害条目): Generator<请
   }
 }
 
+/** 614.1a：这个物件自己的「须横置进场」替代效应。 */
+function 自身须横置(g: GameState, o: Obj, 操控者: number): boolean {
+  for (const ab of ((o.def.能力?.能力 ?? []) as StaticAbility[])) {
+    if (ab.种类 !== '静止式') continue;
+    if (ab.条件 && !判断(g, 操控者, ab.条件, o)) continue;
+    for (const e of ab.效应 ?? []) {
+      if (!('类别' in e) || e.类别 !== '替代' || e.替代.事件 !== '进战场' || !e.进场横置) continue;
+      const 受 = e.替代.受方;
+      if (!受 || 受 === '自身') return true;
+    }
+  }
+  return false;
+}
+
 /** 614.1a：这个物件进场时是否被替代成「横置进场」（109 献帝） */
 function 进场须横置(g: GameState, o: Obj, 操控者: number): boolean {
+  if (自身须横置(g, o, 操控者)) return true;
   for (const src of g.战场) {
     if (src.面 === '暗置' || !有规则叙述(g, src)) continue;
     for (const ab of (src.def.能力?.能力 ?? []) as StaticAbility[]) {
@@ -4285,13 +4647,15 @@ function 进场须横置(g: GameState, o: Obj, 操控者: number): boolean {
   return false;
 }
 
-/** 场上有没有「不能回复体力」的替代效应（091 倾覆）—— 替代.事件 = '回复体力' */
+/** 场上有没有「不能回复体力」的替代效应（091 倾覆）—— 替代.事件 = 玩家回血 / 单位回血 */
 export function 不能回复体力(g: GameState): boolean {
+  const 禁 = (e: { 事件?: string } | undefined): boolean => e?.事件 === '玩家回血' || e?.事件 === '单位回血';
+  for (const c of g.连续效应) if (禁(c.载荷.替代?.替代)) return true;
   for (const o of g.战场) {
     if (o.面 === '暗置' || !有规则叙述(g, o)) continue;
     for (const ab of (o.def.能力?.能力 ?? []) as StaticAbility[]) {
       if (ab.种类 !== '静止式') continue;
-      for (const e of ab.效应 ?? []) if ('类别' in e && e.类别 === '替代' && e.替代.事件 === '回复体力') return true;
+      for (const e of ab.效应 ?? []) if ('类别' in e && e.类别 === '替代' && 禁((e as { 替代?: { 事件?: string } }).替代)) return true;
     }
   }
   return false;
@@ -4304,7 +4668,8 @@ function 施加替代与防止(g: GameState, 条目: 伤害条目, 首选序?: s
   let 守卫 = 0;
   while (守卫++ < 16) {
     if (数量 <= 0) break;                  // 614.7a：0 点伤害从未造成，增加/转移类效应无事件可替代
-    const 适用 = 收集伤害替代效应(g, { ...条目, 数量 }).filter((x) => !已用.has(x.键));
+    const 适用 = 收集伤害替代效应(g, { ...条目, 数量 })
+      .filter((x) => !已用.has(x.键));
     if (适用.length === 0) break;
     const 选 = 首选序?.map((k) => 适用.find((x) => x.键 === k)).find((x) => !!x) ?? 选择生效的(适用);
     if (适用.length > 1) {
@@ -4320,9 +4685,10 @@ function 施加替代与防止(g: GameState, 条目: 伤害条目, 首选序?: s
     const 旧防止 = r.应用?.find((x) => x.操作 === '防止');
     const 防值 = r.防止 ?? (旧防止 && 旧防止.操作 === '防止' ? 旧防止.点数 : undefined);
     if (防值 !== undefined) {              // 615
-      const 实防 = Math.min(防值, 数量);
+      // 615.12：不能被防止的伤害，防止性效应仍然生效，但不防止伤害，护盾也不减少。
+      const 实防 = 条目.不能被防止 ? 0 : Math.min(防值, 数量);
       数量 -= 实防;
-      记录(g, 选.说明 + '：防止 ' + 实防 + ' 点伤害（剩 ' + 数量 + '）');
+      记录(g, 选.说明 + (条目.不能被防止 ? '：不能被防止，防止 0 点' : '：防止 ' + 实防 + ' 点') + '（剩 ' + 数量 + '）');
       continue;
     }
     if (r.改为失去体力 && typeof 条目.目标 === 'number') {
@@ -4368,12 +4734,71 @@ function 施加替代与防止(g: GameState, 条目: 伤害条目, 首选序?: s
  *   既不记账也不触发。直接改 `r.目标.damage` 会绕过防止与触发。
  */
 
+/** 一条伤害规则是否匹配这次伤害事件。 */
+function 伤害规则匹配(g: GameState, m: 伤害匹配 | undefined, 源: Obj, 受方: Obj | number,
+  战斗伤害: boolean | undefined, 锚: Obj | null, 锚控?: number, 射击伤害?: boolean): boolean {
+  if (m?.伤害类型 === '战斗' && !战斗伤害) return false;
+  if (m?.伤害类型 === '非战斗' && 战斗伤害) return false;
+  if (m?.射击伤害 !== undefined && !!射击伤害 !== m.射击伤害) return false;
+  const 控 = 锚控 ?? 有效控制器(g, 源);
+  const 命中 = (sel: Selector | undefined, o: Obj | number): boolean => {
+    if (!sel) return true;
+    if (typeof o === 'number') return false;
+    return 符合选择器(g, o, sel, 锚, 控, 有效特征(g, o));
+  };
+  if (m?.来源 === '自身') { if (源 !== 锚) return false; }
+  else if (m?.来源 && !命中(m.来源, 源)) return false;
+  if (m?.受方 === '自身') { if (受方 !== 锚) return false; }
+  else if (m?.受方 && !命中(m.受方, 受方)) return false;
+  return true;
+}
+
+/** 来源或当前连续效应是否有匹配的「不能被防止」伤害规则。 */
+function 有不能防止的战斗伤害(g: GameState, 源: Obj | null, 受方: Obj | number, 战斗伤害: boolean | undefined, 射击伤害?: boolean): boolean {
+  if (!源) return false;
+  const 能力们 = [...((源.def.能力?.能力 ?? []) as StaticAbility[]), ...(计算特征(g, 源).获得能力 as StaticAbility[])];
+  for (const ab of 能力们) {
+    if (ab.种类 !== '静止式') continue;
+    for (const e of ab.效应 ?? []) {
+      if (!('类别' in e) || e.类别 !== '规则修改' || e.作用点 !== '伤害性质' || !e.修饰.增加性质.includes('不能被防止')) continue;
+      if (e.条件 && !判断(g, 有效控制器(g, 源), e.条件, 源)) continue;
+      if (伤害规则匹配(g, e.匹配, 源, 受方, 战斗伤害, 源, undefined, 射击伤害)) return true;
+    }
+  }
+  for (const c of g.连续效应) {
+    const e = c.载荷.规则;
+    if (!e) continue;
+    if (e.类别 === '规则修改' && e.作用点 === '伤害性质' && e.修饰.增加性质.includes('不能被防止')) {
+      const 锚 = c.来源 ?? null;
+      if (e.条件 && !判断(g, c.控制器, e.条件, 锚 ?? undefined)) continue;
+      if (伤害规则匹配(g, e.匹配, 源, 受方, 战斗伤害, 锚, c.控制器, 射击伤害)) return true;
+    }
+  }
+  // 其他战场物件上的静止式「伤害性质」规则（刚弓阵这类全局规则）。
+  for (const o of g.战场) {
+    if (!有规则叙述(g, o)) continue;
+    const 控 = 有效控制器(g, o);
+    for (const ab of ((o.def.能力?.能力 ?? []) as StaticAbility[])) {
+      if (ab.种类 !== '静止式') continue;
+      if (ab.条件 && !判断(g, 控, ab.条件, o)) continue;
+      for (const e of ab.效应 ?? []) {
+        if (!('类别' in e) || e.类别 !== '规则修改' || e.作用点 !== '伤害性质' || !e.修饰.增加性质.includes('不能被防止')) continue;
+        if (e.条件 && !判断(g, 控, e.条件, o)) continue;
+        if (伤害规则匹配(g, e.匹配, 源, 受方, 战斗伤害, o, 控, 射击伤害)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function 伤害事件(
   g: GameState,
   来源: Obj | null,
   受方: { 目标: Obj | number; 数量: number; 来源?: Obj | null; 战斗伤害?: boolean; 不能被防止?: boolean; 射击伤害?: boolean }[],
   首选序?: string[],
-): void {
+  记到?: 记到规格,
+  产生方式?: 伤害产生方式,
+): { 目标: Obj | number; 数量: number; 来源: Obj | null }[] {
   // 702.23b 舍身：「如果某来源将**对你**将造成**战斗伤害**，你可以改为该来源对**此实体**造成伤害，
   //   且该伤害**不能被防止**。」—— 这里自动替玩家挨（对玩家总是有利；「你可以」的选择留给将来的界面）
   const 重定向后 = 受方.map((r) => {
@@ -4384,38 +4809,46 @@ export function 伤害事件(
     return { ...r, 目标: 挡刀 as Obj | number, 不能被防止: true };
   });
   const 有效 = 重定向后.filter((r) => r.目标 !== undefined && r.目标 !== null);
-  if (有效.length === 0) { 记录(g, '伤害事件没有合法受方（已忽略）'); return; }
-  if (有效.every((r) => r.数量 <= 0)) return;
+  if (有效.length === 0) { 记录(g, '伤害事件没有合法受方（已忽略）'); return []; }
+  if (有效.every((r) => r.数量 <= 0)) return [];
   // 614 / 615 / 616：逐个受方走替代与防止管线
   const 实际 = 有效.map((r) => {
     // 702.2c：受方具有某「<特征>抵抗」、而这次伤害的**来源具有该特性** → 伤害被**防止**。
     //   120.9：被完全防止的伤害**没有发生** —— 所以要在记事件之前拦，不能等管线算完再改 0。
+    const 源 = r.来源 ?? 来源;
+    // 702.6e 类：此来源造成的战斗伤害不能被防止（青釭剑）。
+    const 不能防 = r.不能被防止 === true
+      || 有不能防止的战斗伤害(g, 源, r.目标, r.战斗伤害, r.射击伤害);
     {
-      const 源0 = r.来源 ?? 来源;
-      const 被抵抗 = typeof r.目标 === 'number'
-        ? 玩家抵抗挡得住目标(g, r.目标, 源0)
-        : 抵抗挡住伤害(g, r.目标, 源0);
+      const 被抵抗 = !不能防 && (typeof r.目标 === 'number'
+        ? 玩家抵抗挡得住目标(g, r.目标, 源)
+        : 抵抗挡住伤害(g, r.目标, 源));
       if (被抵抗) {
         const 受名 = typeof r.目标 === 'number' ? g.players[r.目标]!.name : r.目标.def.全名;
-        记录(g, '抵抗（702.2c）：' + 受名 + ' 不会被 ' + (源0 ? 源0.def.全名 : '（无来源）') + ' 造成伤害');
-        return { ...r, 来源: 源0, 数量: 0 };
+        记录(g, '抵抗（702.2c）：' + 受名 + ' 不会被 ' + (源 ? 源.def.全名 : '（无来源）') + ' 造成伤害');
+        return { ...r, 来源: 源, 数量: 0 };
       }
     }
-    const 源 = r.来源 ?? 来源;
 
     // 120.9：**先走 614/615 的替代与防止管线**，算完之后才决定这次伤害事件是否发生 ✓
-    //   ⚠ 以前两处 `记事件` 写在**管线之前**（用管线前的数量 ✗）→ 被完全防止的伤害照样记账、照样触发 ✗
-    //     【敕令流放】要的正是「本回合造成过伤害的单位」✓ —— 打【小乔】（防止自己受到的所有伤害 ✓）
-    //     的单位**不该**被算进去 ✓（被防止 = 没发生 ✓）。
-    const 净 = 施加替代与防止(g, { 目标: r.目标, 数量: r.数量, 来源: 源, 战斗伤害: r.战斗伤害, 射击伤害: r.射击伤害 }, 首选序);
+    const 净 = 施加替代与防止(g, { 目标: r.目标, 数量: r.数量, 来源: 源, 战斗伤害: r.战斗伤害, 不能被防止: 不能防, 射击伤害: r.射击伤害 }, 首选序);
     if (净 > 0) {
-      const 受 = typeof r.目标 === 'number' ? undefined : r.目标.iid;
-      const 源uid = 源?.iid;
-      记事件(g, '受到伤害', { 来源: 源uid, 受方: 受, 数量: 净 });
-      if (源uid !== undefined) {
-        记事件(g, '造成伤害', { 来源: 源uid, 受方: 受, 数量: 净 });
-        if (源) 排队造成伤害触发(g, 源, r.目标, 净);
-      }
+      const 受伤单位 = typeof r.目标 === 'number' ? undefined : 拍LKI(g, r.目标);
+      const 受伤玩家 = typeof r.目标 === 'number' ? r.目标 : undefined;
+      let 方式: 伤害产生方式 = 产生方式 ?? (r.战斗伤害
+        ? { 类型: '战斗' }
+        : { 类型: '效应', 载体: 源?.区域 === '堆叠' ? '令符' : '能力' });
+      if (方式.类型 === '效应' && !方式.来源物件 && 源) 方式 = { ...方式, 来源物件: 源.iid };
+      // 一个伤害事件一条记录；按目标拆成玩家/单位两个事件，不写空字段。
+      const 伤害事件 = 受伤单位 !== undefined ? '对单位造成伤害' : '对玩家造成伤害';
+      记事件(g, 伤害事件, {
+        ...(受伤单位 !== undefined ? { 受伤单位 } : { 受伤玩家 }),
+        伤害数量: 净,
+        战斗伤害: !!r.战斗伤害,
+        伤害来源: 源 ? 拍LKI(g, 源) : null,
+        伤害产生方式: 方式,
+      });
+      排队伤害触发(g, 源 ?? null, r.目标, 净, !!r.战斗伤害);
     }
     return { ...r, 来源: 源, 数量: 净 };
   });
@@ -4429,7 +4862,7 @@ export function 伤害事件(
   if (实际.every((r) => r.数量 <= 0)) {
     记录(g, '伤害全部被防止或替代，该伤害事件不发生（120.9）：' + 描述);
     检查状态动作(g);
-    return;
+    return [];
   }
   记录(g, '伤害事件：' + 描述);
   for (const r of 实际) {
@@ -4452,8 +4885,6 @@ export function 伤害事件(
         pl.标记['天命'] = 天命 - 移;
         记录(g, pl.name + ' 移去 ' + 移 + ' 个天命标记（122.1d，剩 ' + pl.标记['天命'] + '）');
       }
-      // 152 嗜血蛮骑「当**任一玩家**受到伤害时」—— 玩家这条以前**根本没有排队调用**
-      排队玩家受到伤害触发(g, r.目标, r.数量);
       continue;
     }
     // 302.6：对化身造成的伤害会导致该化身移去等量的灵值标记
@@ -4466,33 +4897,21 @@ export function 伤害事件(
     }
     写伤害(g, r.目标, r.目标.damage + r.数量);
     if (有致命 && 是类别(g, r.目标, '单位')) 写记忆(g, r.目标, '致命伤害', true);   // 704.5e
-    排队受到伤害触发(g, r.目标, r.数量);
+  }
+  // 受伤单位自己的记忆必须在状态动作之前写：致命伤害会让单位在这一步立刻死去。
+  if (记到 !== undefined && typeof 记到 === 'object' && 记到.存到 === '受方') {
+    const 受伤 = 实际.filter((r) => r.数量 > 0 && typeof r.目标 !== 'number').map((r) => r.目标);
+    if (受伤.length) 写到记忆(g, null, 记到, 受伤);
   }
   检查状态动作(g);
+  return 实际.filter((r) => r.数量 > 0);
 }
 
 /**
  * 关键词 → 触发式能力（702.12 突击 / 702.13 迎击 / 702.37 重整…）
- * 卡面只写关键词的名字，触发和效应由引擎这里按 702 章生成。
- *
- * 名字从 能力.能力 里读（那个能力的 名称 字段）。
+ * 卡面只写关键词的名字，触发和效应由 `关键词解析表` 生成。
+ * 现在的关键词触发由 `有效能力列表` → `匹配触发能力` 统一处理，不再单独排队。
  */
-export function 排队关键词触发(g: GameState, o: Obj, 时机: '结束步骤'): void {
-  if (o.区域 !== '战场' || !有规则叙述(g, o)) return;
-  const 名字们 = ((o.def.能力?.能力 ?? []) as { 名称?: string }[])
-    .map((ab) => ab.名称).filter((x): x is string => !!x);
-  for (const k of 名字们) {
-    if (k === '重整' && 时机 === '结束步骤') {          // 702.37b
-      g.pending.push({
-        来源: o, abilityIndex: -1, 标签: 触发标签(o, '重整'),
-        能力: {
-          种类: '触发式', 触发: { 事件: '步骤开始', 步骤: '结束步骤' },
-          效应: [{ 操作: '重置', 目标: { ref: '自身' } }, { 操作: '回复', 目标: { ref: '自身' } }],
-        },
-      });
-    }
-  }
-}
 
 /** 搜寻用的简单筛选：类别 / 副类别 / 势力（用印制信息，不看持续性效应） */
 /**
@@ -4539,16 +4958,17 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
   switch (步骤.操作) {
     case '失去体力': {
       // 119：失去体力**不是伤害** —— 不走伤害事件，所以 615 防止、702.6e 坚韧都管不了它
-      const 失量 = typeof 步骤.数量 === 'number' ? 步骤.数量 : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
+      const 失量 = typeof 步骤.数量 === 'number' ? 步骤.数量 : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
       let 总 = 0;
       for (const t of 解析受方(g, item, 步骤.目标)) {
         if (typeof t === 'number') {
           const pl = g.players[t]!;
           pl.体力 -= 失量;
-          记事件(g, '失去体力', { 受方: t, 数量: 失量 });
+          记事件(g, '失去体力', { 失去体力玩家: t, 失去体力数量: 失量 });
           记录(g, pl.name + ' 失去 ' + 失量 + ' 点体力');
         } else {
           写伤害(g, t, t.damage + 失量);
+          记事件(g, '失去体力', { 失去体力单位: 拍LKI(g, t), 失去体力数量: 失量 });
           记录(g, t.def.全名 + ' 失去 ' + 失量 + ' 点体力（已损失 ' + t.damage + '）');
         }
         总 += 失量;
@@ -4556,9 +4976,18 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       item.产物 = 总;   // 「记到」用：这一步实际让受方失去的总量
       break;
     }
-    case '重置':
-      for (const t of 解析受方(g, item, 步骤.目标)) if (typeof t !== 'number' && t.tapped) { 写横置(g, t, false); 记录(g, t.def.全名 + ' 被重置'); }
+    case '重置': {
+      // 701.6b：只有已横置的实体可以进行重置动作。
+      let 重了 = 0;
+      for (const t of 解析受方(g, item, 步骤.目标)) {
+        if (typeof t === 'number' || !t.tapped) continue;
+        写横置(g, t, false);
+        记录(g, t.def.全名 + ' 被重置');
+        重了++;
+      }
+      item.上一步生效 = 重了 > 0;
       break;
+    }
       case '回复': {
         /**
          * 119.2：给玩家回 N 点体力 ✓；给**物件**时：
@@ -4567,11 +4996,11 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
          * ⚠ 2026-10 修 ✗→✓：以前物件**只在"没写数量"时**才处理 ✗，写了 `数量: 1` 就被**整个忽略** ✗
          *   →【刘备】"你和每个由你操控的单位各回复 1 点" 只让**玩家**回了 ✓、单位一个没回 ✓。
          */
-        const 量 = 步骤.数量 === '触发事件量' ? (item.事件?.数量 ?? 0)
-          : (typeof 步骤.数量 === 'object' && 步骤.数量 !== null) ? 取值(g, item.操控者, 步骤.数量 as Value, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X)
+        const 量 = 步骤.数量 === '触发事件量' ? 事件数量(item.事件)
+          : (typeof 步骤.数量 === 'object' && 步骤.数量 !== null) ? 取值(g, item.操控者, 步骤.数量 as Value, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件)
           : (步骤.数量 === 'X' ? 0 : 步骤.数量);   // 「回复 X 点」现在没有卡用，按 0
         for (const t2 of 解析受方(g, item, 步骤.目标)) {
-          // 091 倾覆：「单位和玩家不能回复体力」= 一条替代效应（事件 = 回复体力）
+          // 091 倾覆：「单位和玩家不能回复体力」= 两条替代效应（事件 = 玩家回血 / 单位回血）
           if (不能回复体力(g)) { 记录(g, (typeof t2 === 'number' ? g.players[t2]!.name : (t2 as Obj).def.全名) + ' 不能回复体力（091）'); continue; }
           if (typeof t2 === 'number') {
             const pl = g.players[t2]!;
@@ -4587,8 +5016,8 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
              */
             if (实 > 0) {
               记录(g, pl.name + ' 回复 ' + 实 + ' 点体力');
-              记事件(g, '回复体力', { 受方: t2, 数量: 实 });
-              排队回复体力触发(g, t2);
+              记事件(g, '玩家回血', { 回复玩家: t2, 回复数量: 实 });
+              排队回复体力触发(g, t2, 实);
             }
           } else {
             // 物件：写了数量就"回复 N 点"（减 N 点伤害 ✓），没写就回满 ✓
@@ -4597,19 +5026,23 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
             if (减 > 0) {
               写伤害(g, t2, 原伤害 - 减);
               记录(g, t2.def.全名 + ' 回复 ' + 减 + ' 点体力（已损失 ' + (原伤害 - 减) + '）');
-              记事件(g, '回复体力', { 受方: t2.iid, 数量: 减 });
-              排队回复体力触发(g, t2);
+              记事件(g, '单位回血', { 回复单位: 拍LKI(g, t2), 回复数量: 减 });
+              排队回复体力触发(g, t2, 减);
             }
           }
         }
         break;
       }
     case '消灭': {
+      const 消灭们: Obj[] = [];
       for (const t of 解析受方(g, item, 步骤.目标)) {
         if (typeof t === 'number' || t.区域 !== '战场') continue;
         记录(g, t.def.全名 + ' 被消灭');
         置入墓地(g, t);
+        消灭们.push(t);
       }
+      item.产物 = 消灭们;
+      item.上一步生效 = 消灭们.length > 0;
       break;
     }
     case '选择牺牲': {
@@ -4628,7 +5061,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       const 源 = item.来源 ?? item.card;
     const 可牺 = g.战场.filter((x) => 有效控制器(g, x) === p
       && (!步骤.除自身 || x !== 源)
-      && (!步骤.筛选 || 符合筛选(g, x, 步骤.筛选, 有效特征(g, x), undefined, undefined, undefined, 有效控制器(g, x), item.事件?.受方)));
+      && (!步骤.筛选 || 符合筛选(g, x, 步骤.筛选, 有效特征(g, x), undefined, undefined, undefined, 有效控制器(g, x), 事件角色(g, item.事件))));
       // 「若你无法如此做」（157 吕布）：没牺牲成 → 结果 false，后面的步骤才走 若:{键:'牺牲',为:false}
     if (可牺.length < 需) { 记录(g, g.players[p]!.name + ' 没有足够的单位可牺牲（要 ' + 需 + '，只有 ' + 可牺.length + '）'); item.上一步生效 = false; 可选失败(item); break; }
       // ⚠ **只有一个也照问** —— 就算只有一个选择也保留选择动作。
@@ -4657,7 +5090,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
           .filter((x): x is Obj => typeof x !== 'number');
         for (const t of 牌们) {
           移到区域(g, t, '墓地');
-          记事件(g, '弃牌', { 受方: t.iid });
+          记事件(g, '弃牌', { 弃牌玩家: 号, 弃掉的牌: t.lastKnown ?? 拍LKI(g, t) });
           排队弃牌触发(g, 号, t);
           记录(g, pl.name + ' 弃掉 ' + t.def.全名 + ((步骤 as { 标签?: string }).标签 ?? ''));
         }
@@ -4669,7 +5102,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       }
       if (item.本次选择) {
         const 弃们 = item.本次选择.filter((t) => t && typeof t !== 'number' && typeof t !== 'string') as unknown as Obj[];
-        for (const t of 弃们) { 移到区域(g, t, '墓地'); 记事件(g, '弃牌', { 受方: t.iid }); 排队弃牌触发(g, 号, t); 记录(g, pl.name + ' 弃掉 ' + t.def.全名 + ((步骤 as { 标签?: string }).标签 ?? '')); }
+        for (const t of 弃们) { 移到区域(g, t, '墓地'); 记事件(g, '弃牌', { 弃牌玩家: 号, 弃掉的牌: t.lastKnown ?? 拍LKI(g, t) }); 排队弃牌触发(g, 号, t); 记录(g, pl.name + ' 弃掉 ' + t.def.全名 + ((步骤 as { 标签?: string }).标签 ?? '')); }
         item.产物 = 弃们;
         item.上一步生效 = 弃们.length > 0;
         item.本次选择 = undefined;
@@ -4684,7 +5117,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
           const c = pl.hand[i2];
           if (!c) break;
           移到区域(g, c, '墓地');
-          记事件(g, '弃牌', { 受方: c.iid });
+          记事件(g, '弃牌', { 弃牌玩家: 号, 弃掉的牌: c.lastKnown ?? 拍LKI(g, c) });
           排队弃牌触发(g, 号, c);
           item.产物 = [c];
           记录(g, pl.name + ' 随机弃掉 ' + c.def.全名);
@@ -4836,7 +5269,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       const 单位们 = 可进.filter((c) => 是类别(g, c, '单位'));
       let 位们: (阵地 | null)[] = [];
       if (步骤.阵地) {
-        位们 = 步骤.阵地.map((x) => (x && typeof x === 'object' && '死者位置' in x) ? (item.事件?.死者位置 ?? null) : x);
+        位们 = 步骤.阵地.map((x) => (x && typeof x === 'object' && '死亡角色' in x) ? (item.事件?.死亡角色?.阵地 ?? null) : x);
       } else if (单位们.length) {
         const 可入 = Math.min(单位们.length, 阵地顺序.length);
         if (item.本次选择 === undefined) {
@@ -4993,7 +5426,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
     }
     case '磨牌': {
       const 磨数 = typeof 步骤.数量 === 'number' ? 步骤.数量
-        : 取值(g, item.操控者, 步骤.数量, item.来源 ?? item.card ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
+        : 取值(g, item.操控者, 步骤.数量, item.来源 ?? item.card ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
       for (const p of 解析玩家们(g, item, 步骤.玩家)) {
         const pl = g.players[p]!;
         const n = Math.min(磨数, pl.library.length);
@@ -5006,8 +5439,8 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       const 源 = 解析受方(g, item, 步骤.源 ?? { ref: '自身' }).find((x): x is Obj => typeof x !== 'number' && !!x);
       if (!源) { 记录(g, '征召复制：找不到复制源'); break; }
       const 个数 = typeof 步骤.数量 === 'number' ? 步骤.数量
-        : 取值(g, item.操控者, 步骤.数量 ?? 1, 源, 记忆宿主(item) ?? undefined, item.宣告X);
-      const 阵地表 = 步骤.阵地?.map((x) => (x && typeof x === 'object' && '死者位置' in x) ? (item.事件?.死者位置 ?? null) : x);
+        : 取值(g, item.操控者, 步骤.数量 ?? 1, 源, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
+      const 阵地表 = 步骤.阵地?.map((x) => (x && typeof x === 'object' && '死亡角色' in x) ? (item.事件?.死亡角色?.阵地 ?? null) : x);
       const 项: { 对象: Obj; 操控者: number; 阵地: 阵地 | null }[] = [];
       for (let k = 0; k < 个数; k++) {
         const t = 造复制对象(g, 源, item.操控者, '战场', true, 步骤.例外);
@@ -5040,7 +5473,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
           记忆: 源项.记忆 ? { ...源项.记忆 } : undefined,
           暂存: undefined, 重复轮: undefined, 判定牌: undefined, 判定主: undefined,
           观星已问顶: undefined, 观星已问底: undefined, 上一步生效: undefined,
-          可选结果: undefined, 可选当前: undefined,
+          可选结果: undefined, 可选当前: undefined, 改目标: undefined,
           复制已选: undefined, 复制效应: undefined, 复制已用: undefined };
         if (步骤.新目标 && 源项.目标规格?.length) {
           新.目标 = []; 新.目标槽 = {}; 新.步骤目标槽 = undefined;
@@ -5064,7 +5497,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
         记忆: 源项.记忆 ? { ...源项.记忆 } : undefined,
         暂存: undefined, 重复轮: undefined, 判定牌: undefined, 判定主: undefined,
         观星已问顶: undefined, 观星已问底: undefined, 上一步生效: undefined,
-        可选结果: undefined, 可选当前: undefined,
+        可选结果: undefined, 可选当前: undefined, 改目标: undefined,
         // 708.6：为实体作出的「于进场时」选择**不会被复制** —— 复制牌进场时自己重新选。
         复制已选: undefined, 复制效应: undefined, 复制已用: undefined };
       if (步骤.新目标) {
@@ -5085,8 +5518,8 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
       if (!源) { 记录(g, '复制：找不到复制源'); break; }
       if (步骤.作为指示物) {
         const 个数 = typeof 步骤.数量 === 'number' ? 步骤.数量
-          : 取值(g, item.操控者, 步骤.数量 ?? 1, 源, 记忆宿主(item) ?? undefined, item.宣告X);
-        const 阵地表 = 步骤.阵地?.map((x) => (x && typeof x === 'object' && '死者位置' in x) ? (item.事件?.死者位置 ?? null) : x);
+          : 取值(g, item.操控者, 步骤.数量 ?? 1, 源, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
+        const 阵地表 = 步骤.阵地?.map((x) => (x && typeof x === 'object' && '死亡角色' in x) ? (item.事件?.死亡角色?.阵地 ?? null) : x);
         const 项: { 对象: Obj; 操控者: number; 阵地: 阵地 | null }[] = [];
         for (let k = 0; k < 个数; k++) {
           const t = 造复制对象(g, 源, item.操控者, '战场', true, 步骤.例外);
@@ -5112,11 +5545,11 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
     case '征召': {
       // 数量可以是固定数字，也可以是按场面/记忆算的 Value
       const 个数 = typeof 步骤.数量 === 'number' ? 步骤.数量
-        : 取值(g, item.操控者, 步骤.数量 as Value, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
-      // 阵地 里的每一项可以是具体阵地名、null，或者 `{ 死者位置: true }`
+        : 取值(g, item.操控者, 步骤.数量 as Value, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
+      // 阵地 里的每一项可以是具体阵地名、null，或者 `{ 死亡角色: '阵地' }`
       //   —— 后者 =「**前者原先的位置**」（134 黄铜传道者：指示物放在死者的阵地）。
       const 阵地表 = 步骤.阵地?.map((x) =>
-        (x && typeof x === 'object' && '死者位置' in x) ? (item.事件?.死者位置 ?? null) : x);
+        (x && typeof x === 'object' && '死亡角色' in x) ? (item.事件?.死亡角色?.阵地 ?? null) : x);
       // 112.6 / 701.23c-d：征召**单位**指示物时，**你须为每一个选择一个阵地**，
       //   不能选两个相同的阵地；所有阵地都被选完后，其余指示物不能进场。
       //   ⚠ 卡数据**写了**阵地的（134「死者原先的位置」）是特例，照旧不问 ✓。
@@ -5199,11 +5632,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
     case '持续': {
       // 611.2b 的「只要……」条件。**在这里把目标解析成 uid** ——
       //   这样条件判断不需要 StackItem（连续效应会活得比这个 item 久）
-      let 条件 = 步骤.条件 as Condition | undefined;
-      if (条件 && 条件.操作 === '附属在') {
-        const t = 解析受方(g, item, { 目标: 条件.目标 })[0];
-        条件 = { 操作: '附属在', 目标: String(typeof t === 'number' ? t : (t?.iid ?? '')) };
-      }
+      const 条件 = 步骤.条件 as Condition | undefined;
       // 611.2a：**没有列出时间段 → 生效直到游戏结束**
       const 时长 = 步骤.时长 === '直到回合结束' ? '直到回合结束'
         : 步骤.时长 === '下一次重置步骤' ? '下一次重置步骤' : '直到游戏结束';
@@ -5219,7 +5648,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
         //   （这正是不用 611.3 那条路的原因 —— 那条不锁定，611.3a）
         // 统一筛选模型：持续范围也按域取候选（物件域；玩家目标暂不支持）
         const 条件 = 代换目标引用(g, item, 范围)?.筛选 ?? [];
-        受锁定 = 物件候选(g, { 控制器: item.操控者, item, 锚: item.来源 ?? item.card ?? null, 触发受方: item.事件?.受方, 记忆源: 记忆宿主(item) ?? undefined }, 条件)
+        受锁定 = 物件候选(g, { 控制器: item.操控者, item, 锚: item.来源 ?? item.card ?? null, 触发受方: 事件角色(g, item.事件), 记忆源: 记忆宿主(item) ?? undefined }, 条件)
           .map((o) => o.iid);
       } else if (步骤.目标 !== undefined) {
         // 611.2c：结算产生的持续效应在开始时**锁定**受影响的物件组（selectRelation/选 都可能给一组）
@@ -5265,7 +5694,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
             写阵地(g, t, 答); g.players[item.操控者]!.阵地[答] = t;
             迎击检查(g, t, 答, item.操控者);
             if ((item as unknown as { 曾占阵地?: boolean }).曾占阵地) {
-              记事件(g, '移动', { 受方: t.iid });   // 301.8：换操控权导致的换阵地算移动（701.22b）
+              记事件(g, '移动', { 移动角色: 拍LKI(g, t) });   // 301.8：换操控权导致的换阵地算移动（701.22b）
               排队移动触发(g, t);
               (item as unknown as { 曾占阵地?: boolean }).曾占阵地 = false;
             }
@@ -5288,7 +5717,11 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
         id: g.nextStackId++, 时间印记: g.nextStamp++, 来源: item.来源 ?? item.card ?? null,
         控制器: item.操控者, 时长, 范围, 受锁定, 指定, 条件, ...(到期玩家 !== undefined ? { 到期玩家 } : {}),
         // 载荷**两样都能带**（613.6）：给了哪样就带哪样，互不排斥
-        载荷: { ...(步骤.层 ? { 层: 步骤.层 } : {}), ...(步骤.替代 ? { 替代: 步骤.替代 } : {}) },
+        载荷: {
+          ...(步骤.层 ? { 层: 步骤.层 } : {}),
+          ...(步骤.替代 ? { 替代: 步骤.替代 } : {}),
+          ...(步骤.规则 ? { 规则: 步骤.规则 } : {}),
+        },
       });
       记录(g, '持续效应（' + 时长 + '）：' + (item.card?.def.全名 ?? item.标签));
       break;
@@ -5305,7 +5738,7 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
           const v = e2.点数;
           if (typeof v === 'number') return v;
           if (v === 'X') return item.宣告X ?? 0;                 // 108.3a
-          if (v === '触发事件量') return item.事件?.数量 ?? 0;
+          if (v === '触发事件量') return 事件数量(item.事件);
           if (v === '来源武力') {
             // 400.7：来源已经换区域/离场 → 用触发时的 LKI，不读新实例。
             if (item.来源快照 && item.来源 && item.来源.iid !== item.来源快照.iid) return item.来源快照.武力 ?? 0;
@@ -5356,13 +5789,20 @@ export function 执行一步(g: GameState, item: StackItem, 步骤: ResolveStep)
         if (!询问伤害替代(g, item, 条目)) break;   // 挂起，执行步骤看到待选择会停
         const 首选序 = item.伤害替代序;
         item.伤害替代序 = undefined;
-        伤害事件(g, src, 受方, 首选序);
+        const 结果 = 伤害事件(g, src, 受方, 首选序, 步骤.记到,
+          步骤.战斗伤害 ? { 类型: '战斗' } : {
+            类型: '效应',
+            载体: item.种类 === '令符' ? '令符' : '能力',
+            效应实例: item.id,
+          });
+        // 供 记到/存到:'受方' 使用：只记实际受到净伤害的物件。
+        item.产物 = 结果.filter((r) => r.数量 > 0 && typeof r.目标 !== 'number').map((r) => r.目标);
       }
       break;
     }
     case '抓牌': {
       // 个数 可以是固定数字，也可以是按场面算的 Value（「每有一个…便抓一张」）
-      const n = typeof 步骤.数量 === 'number' ? 步骤.数量 : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
+      const n = typeof 步骤.数量 === 'number' ? 步骤.数量 : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
       // 「每位玩家各抓一张牌」= player 解析出多个玩家（176 南华老仙 / 063 孙乾）
       for (const p of 解析玩家们(g, item, 步骤.玩家)) 抓牌(g, p, n);
       break;
@@ -5384,13 +5824,13 @@ function 取实例列表(值: unknown): number[] {
  * 形状固定：`选什么:'支付源'` ✓（收发层就据此产出**支付源槽** ✓：`归:'支付源'` + 需按点数 + 候选带 `提供` ✓），
  * 客户端零改动就是"支付 0/N + 点领土" ✓。以后任何"你可以支付{N}"的牌都调这里 ✓。
  */
-function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
+function 付数字费待选择(g: GameState, 玩家: number, 费: number, 对象?: 支付对象) {
   return {
     类型: '选' as const, 选什么: '支付源' as const,
     标签: '支付 ' + 费 + ' 点数字费用：选你的领土（可多选）',
     玩家, 数量: { 最小: 费, 最大: 费 },   // ★ 按**点数**（不是张数）—— 收发层的支付源槽按它算 支付 n/N ✓
     可取消: true,                        // ★ 链上的步骤：允许中止（取消 = 不回调 → 链断 ✓）
-    候选: 可支付来源(g, 玩家).map((x) => ({ 键: x.iid, 名称: x.名称, 提供: x.提供 })),
+    候选: 可支付来源(g, 玩家, 对象).map((x) => ({ 键: x.iid, 名称: x.名称, 提供: x.提供 })),
   };
 }
     /**
@@ -5403,17 +5843,19 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       const 数 = (步骤 as unknown as { 点数?: { 最小?: number; 最大?: number } }).点数;
       const 费 = 数?.最小 ?? 0;   // 支付行为的参数：点数（上下限同值 = 恰好付这么多 ✓）
       const 谁 = item.操控者;
+      const 支付物 = item.来源 ?? item.card;
+      const 支付对象: 支付对象 | undefined = 支付物 ? { 物件: 支付物, 用途: '效应支付' } : undefined;
       if (费 <= 0) { item.上一步生效 = true; 可选完成(item, true); break; }
-      if (!可支付数字费用(g, 谁, 费)) {
+      if (!可支付数字费用(g, 谁, 费, 支付对象)) {
         item.上一步生效 = false;
         可选失败(item);
         记录(g, g.players[谁]!.name + ' 付不起 ' + 费 + ' 点，这一步跳过');
         break;
       }
       const 已 = 取实例列表(item.本次选择);
-      if (!已.length) { item.待选择 = 付数字费待选择(g, 谁, 费); return; }
+      if (!已.length) { item.待选择 = 付数字费待选择(g, 谁, 费, 支付对象); return; }
       item.本次选择 = undefined;
-      if (!支付数字费用(g, 谁, 费, 已)) {
+      if (!支付数字费用(g, 谁, 费, 已, 支付对象)) {
         item.上一步生效 = false;
         可选失败(item);
         记录(g, g.players[谁]!.name + ' 支付的领土不足 ' + 费 + ' 点，跳过');
@@ -5433,6 +5875,11 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
         ? g.stack.findIndex((x) => x.id === 栈id)
         : g.stack.findIndex((x) => x.card === 取实体(t));
       if (idx >= 0) {
+        const 目标项 = g.stack[idx]!;
+        if (目标项.card && 有自身限制(g, 目标项.card!, '被取消')) {
+          记录(g, '取消失败：' + 目标项.card.def.全名 + ' 不能被取消');
+          break;
+        }
         const rm = 堆叠取第(g, idx);
         记录(g, '取消 ' + (rm!.card ? rm!.card.def.全名 : rm!.标签));
         if (rm!.card && rm!.复制令符) {
@@ -5441,6 +5888,75 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
           写区域(g, rm!.card, '暂存');
         } else if (rm!.card) 置入墓地(g, rm!.card);      // 令符 → 拥有者的墓地；能力没有牌，只是离开堆叠
       } else 记录(g, '取消失败：目标不在堆叠');
+      break;
+    }
+    case '改目标': {
+      // 115.7：只改已有目标；目标数量固定为当前数量，模式不变。
+      const t = 取目标项(item, 步骤.令符.目标);
+      const 栈id = 取堆叠项(t);
+      const 目标栈 = 栈id !== undefined
+        ? g.stack.find((x) => x.id === 栈id)
+        : g.stack.find((x) => x.card === 取实体(t));
+      if (!目标栈) { 记录(g, '改目标：目标不在堆叠'); break; }
+      if (item.改目标?.栈id !== 目标栈.id) item.改目标 = { 栈id: 目标栈.id, 索引: 0 };
+      if (!目标栈.目标?.length || !目标栈.目标规格?.length) { item.改目标 = undefined; break; }
+      const 规格 = 目标栈.目标规格;
+      const 取规格 = (i: number) => 规格[Math.min(i, 规格.length - 1)]!;
+      const 候选键2 = (c: 候选) => c.obj ? c.obj.iid : c.堆叠项 !== undefined ? '堆叠' + c.堆叠项 : '玩家' + c.玩家!;
+      const 候选名 = (c: 候选) => c.obj ? c.obj.def.全名 : c.堆叠项 !== undefined
+        ? (g.stack.find((x) => x.id === c.堆叠项)?.标签 ?? '（堆叠项）')
+        : g.players[c.玩家!]!.name;
+      const 当前候选 = (x: 目标): 候选 => typeof x === 'number' ? { obj: null, 玩家: x }
+        : '堆叠项' in x ? { obj: null, 玩家: null, 堆叠项: x.堆叠项 }
+        : { obj: x, 玩家: null };
+      // 先消化上一次「选目标」的答案
+      if (item.本次选择 !== undefined) {
+        const 答 = item.本次选择[0];
+        if (答 !== undefined) {
+          const 新: 目标 | undefined = typeof 答 === 'string'
+            ? 答.startsWith('玩家') ? Number(答.slice(2))
+              : 答.startsWith('堆叠') ? { 堆叠项: Number(答.slice(2)) } : undefined
+            : 答 as 目标;
+          if (新 !== undefined) {
+            const i = item.改目标.索引;
+            const sp = 取规格(i);
+            目标栈.目标[i] = 新;
+            (目标栈.目标槽 ??= {})[目标键(目标栈, sp.目标名)] = 新;
+          }
+        }
+        item.本次选择 = undefined;
+        item.改目标.索引++;
+      }
+      while (item.改目标.索引 < 目标栈.目标.length) {
+        const i = item.改目标.索引;
+        const 当前 = 目标栈.目标[i]!;
+        const sp = 取规格(i);
+        let 锚: Obj | null = 目标栈.来源 ?? 目标栈.card ?? null;
+        if (sp.依赖) {
+          const 父 = 目标栈.目标槽?.[目标键(目标栈, sp.依赖)];
+          if (父 && typeof 父 === 'object' && !('堆叠项' in 父)) 锚 = 父;
+        }
+        const 候 = 候选目标(g, 目标栈.操控者, sp, 锚, true, 事件角色(g, 目标栈.事件), 记忆宿主(目标栈) ?? undefined);
+        const 当前键 = 候选键2(当前候选(当前));
+        const 其他键 = new Set(目标栈.目标.filter((_, j) => j !== i).map((x) => 候选键2(当前候选(x))));
+        let 列 = 候.filter((c) => !其他键.has(候选键2(c)));
+        // 依赖槽的锚：新锚必须至少能配到依赖槽要求的目标数（螺旋突刺）。
+        const 依赖者 = 规格.find((x) => x.依赖 === sp.目标名);
+        if (依赖者 && 依赖者.数量.最小 > 0) {
+          列 = 列.filter((c) => c.obj && 候选目标(g, 目标栈.操控者, 依赖者, c.obj, true,
+            事件角色(g, 目标栈.事件), 记忆宿主(目标栈) ?? undefined).length >= 依赖者.数量.最小);
+        }
+        // 重选目标：当前目标本来就在候选里；依赖槽在新锚下不合法时不能再选旧目标。
+        if (!列.some((c) => 候选键2(c) === 当前键) && !sp.依赖) 列.push(当前候选(当前));
+        if (列.length === 0) { item.改目标.索引++; continue; }
+        item.待选择 = { 类型: '选', 选什么: '物件', 玩家: item.操控者,
+          标签: '改目标：' + 候选名(当前候选(当前)) + '（' + (i + 1) + '/' + 目标栈.目标.length + '）',
+          数量: { 最小: 1, 最大: 1 },
+          候选: 列.map((c) => ({ 键: 候选键2(c), 名称: 候选名(c) })) };
+        return;
+      }
+      item.改目标 = undefined;
+      item.上一步生效 = true;
       break;
     }
     case '放逐直到': {
@@ -5540,7 +6056,7 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
           }
           写阵地(g, 走, 目的); 新主.阵地[目的] = 走;
           记录(g, 走.def.全名 + ' 移动到 ' + 目的);
-          记事件(g, '移动', { 受方: 走.iid });          // 701.18
+          记事件(g, '移动', { 移动角色: 拍LKI(g, 走) });          // 701.18
           排队移动触发(g, 走);
           迎击检查(g, 走, 目的, 目的地主);
         }
@@ -5593,7 +6109,7 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
         }
         记录(g, t.def.全名 + (目的区 === '手牌' ? ' 被移回其拥有者手上' : 到底 ? ' 被置于其拥有者的牌库底' : 目的区 === '牌库' ? ' 被置于其拥有者的牌库顶' : 目的区 === '墓地' ? ' 被置于其拥有者的墓地' : ' 被放逐'));
         // 701.18c：移动**不是死去**（700.4 只认「从战场进墓地」），所以只记「离开战场」
-        if (曾战场) 记事件(g, '离开战场', { 受方: t.iid });
+        if (曾战场) 记事件(g, '离开战场', { 离场角色: t.lastKnown ?? 拍LKI(g, t) });
         // 701.20「洗入牌库」：先进去，再整体洗 —— 位置随机化由洗牌统一负责
         if (洗入) 已洗入.add(t.owner);
       };
@@ -5614,10 +6130,12 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       // 通用记忆操作：设为 / 加上 / 减去 / 乘 / 追加 / 删除 / 清空
       const 步 = 步骤 as {
         键: string;
-        运算?: '设为' | '加上' | '减去' | '乘' | '追加' | '删除' | '清空';
+        运算?: '设为' | '加上' | '减去' | '乘' | '追加' | '删除' | '清空' | '并集' | '差集';
         从?: RecipientRef;
         取?: '武力' | '体力上限' | '打出费用' | '费用值' | '伤害' | '玩家号' | '相对阵地';
         值?: number | Value;
+        左?: 记忆集合;
+        右?: 记忆集合;
         范围?: '来源' | '本能力';
       };
       const 本能力 = 步.范围 === '本能力';
@@ -5632,7 +6150,31 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
         记录(g, '清空记忆 ' + 步.键);
         break;
       }
+      if (步.运算 === '并集' || 步.运算 === '差集') {
+        const 读集合 = (v: 记忆集合 | undefined): (string | number)[] => {
+          const 原 = v && !Array.isArray(v) && '记忆' in v
+            ? (本能力 ? item.记忆?.[v.记忆] : 读记忆(item, v.记忆))
+            : v;
+          const 列 = Array.isArray(原) ? 原 : (原 === undefined ? [] : [原]);
+          return 列.filter((x): x is string | number => typeof x === 'string' || typeof x === 'number');
+        };
+        const 左集 = 步.左 !== undefined ? 读集合(步.左) : 读集合({ 记忆: 步.键 });
+        const 右集 = 读集合(步.右);
+        const 结果 = 步.运算 === '并集'
+          ? [...new Set([...左集, ...右集])]
+          : [...new Set(左集)].filter((x) => !右集.includes(x));
+        写(结果);
+        记录(g, '记忆 ' + 步.键 + (步.运算 === '并集' ? ' 并集 ' : ' 差集 ') + 结果.length);
+        break;
+      }
       const 解析数 = (o: Obj): number => {
+        // 死去角色是 LKI：读死前数据，不按当前牌重算。
+        if (!('sick' in (o as unknown as Record<string, unknown>))) {
+          const p = o as unknown as LKI;
+          if (步.取 === '武力') return p.武力 ?? 0;
+          if (步.取 === '体力上限') return p.体力上限 ?? 0;
+          if (步.取 === '伤害') return p.damage;
+        }
         const d = o.def;
         if (步.取 === '武力') return 武力(g, o);
         if (步.取 === '体力上限') return 体力上限(g, o);
@@ -5643,9 +6185,20 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       const 求值 = (): unknown => {
         if (步.值 !== undefined) {
           return typeof 步.值 === 'number' ? 步.值
-            : 取值(g, item.操控者, 步.值, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
+            : 取值(g, item.操控者, 步.值, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
         }
         if (步.从 === undefined) return undefined;
+        // 死去角色：读事件里的 LKI；没有 LKI 才回退到按 uid 找当前牌。
+        if ((步.从 as { ref?: string }).ref === '死亡角色') {
+          const 死 = item.事件?.死亡角色;
+          if (死) {
+            if (步.取 === '武力') return 死.武力 ?? 0;
+            if (步.取 === '体力上限') return 死.体力上限 ?? 0;
+            if (步.取 === '伤害') return 死.damage;
+            if (步.取 === '相对阵地') return 死.阵地 ?? undefined;
+            if (步.取 === undefined) return 死;
+          }
+        }
         const 们 = 解析受方(g, item, 步.从);
         if (步.取 === '玩家号') return 们.find((x): x is number => typeof x === 'number');
         const 物件们 = 们.filter((x): x is Obj => typeof x !== 'number');
@@ -5695,10 +6248,21 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       记录(g, '记忆 ' + 步.键 + ' = ' + 新);
       break;
     }
-    case '横置':
-      // 701.26：把一个实体改成横置。已横置的再横置没有任何作用（112.5）。
-      for (const t2 of 解析受方(g, item, 步骤.to)) if (typeof t2 !== 'number' && !t2.tapped) { 写横置(g, t2, true); 记录(g, t2.def.全名 + ' 被横置'); 记事件(g, '成为横置', { 受方: t2.iid });  排队单位事件触发(g, '成为横置', t2); }
+    case '横置': {
+      // 701.6a：只有未横置的实体可以进行横置动作；已横置的再横置不成立。
+      let 横了 = 0;
+      for (const t2 of 解析受方(g, item, 步骤.to)) {
+        if (typeof t2 === 'number' || t2.tapped) continue;
+        写横置(g, t2, true);
+        记录(g, t2.def.全名 + ' 被横置');
+        记事件(g, '成为横置', { 横置角色: 拍LKI(g, t2) });
+        排队单位事件触发(g, '成为横置', t2);
+        横了++;
+      }
+      // 「你可以横置……若如此做」：一个都没横置成功 = 这一步没做成。
+      item.上一步生效 = 横了 > 0;
       break;
+    }
     case '翻牌库顶': for (const p of 解析玩家们(g, item, 步骤.玩家)) {
       // 401.2 牌库是隐藏区：先「展示」让双方看到翻了什么，再按 分流 逐张送走。
       // ⚠ 「展示」与「分去处」在规则上是**两件事** ✓（牌数据里各写各的 ✓）——
@@ -5795,8 +6359,8 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       写阵地(g, 甲, 乙阵);
       写阵地(g, 乙, 甲阵);
       记录(g, 甲.def.全名 + ' 与 ' + 乙.def.全名 + ' 交换阵地（' + 甲阵 + ' ⇄ ' + 乙阵 + '）');
-      记事件(g, '移动', { 受方: 甲.iid });
-      记事件(g, '移动', { 受方: 乙.iid });
+      记事件(g, '移动', { 移动角色: 拍LKI(g, 甲) });
+      记事件(g, '移动', { 移动角色: 拍LKI(g, 乙) });
       排队移动触发(g, 甲);
       排队移动触发(g, 乙);
       迎击检查(g, 甲, 乙阵, 乙主.index);
@@ -5873,12 +6437,12 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       }
       case '重复': {
       /**
-       * **通用循环**（「展示牌直到…为止」）：反复执行 子步骤，直到 `直至` 成立。
+       * **通用循环**（「展示牌直到…为止」）：反复执行 子步骤，直到 `终止` 成立。
        * · 子步骤挂起（待选择）时用 item.子步 记到第几条，答完从那里接着跑；
-       * · 一轮跑完计数一次（item.重复轮），`最多` 缺省 99 —— 条件一直不成立时停，防死循环；
-       * · 只认 Condition，不认识展示/收集：循环里要收集什么由子步骤自己 `记到` 记忆。
+       * · 一轮跑完计数一次（item.重复轮），`最多` 缺省 99 —— 终止条件一直不成立时停，防死循环；
+       * · 终止条件是 Condition，不认识展示/收集：循环里要收集什么由子步骤自己 `记到` 记忆。
        */
-      const 步 = 步骤 as unknown as { 直至: Condition; 效应: ResolveStep[]; 最多?: number };
+      const 步 = 步骤 as unknown as { 终止: Condition; 效应: ResolveStep[]; 最多?: number };
       const 键 = item.步骤游标 ?? 0;
       item.重复轮 ??= {};
       let 轮 = item.重复轮[键] ?? 0;
@@ -5901,7 +6465,7 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
         if (挂起) return;
         轮 += 1;
         item.重复轮[键] = 轮;
-        if (判断(g, item.操控者, 步.直至, 锚 ?? undefined, item)) break;
+        if (判断(g, item.操控者, 步.终止, 锚 ?? undefined, item)) break;
         // 子步骤明确说「没做到」（如展示时牌库空了）→ 停，别空转到上限
         if (item.上一步生效 === false) { 记录(g, (item.标签 ?? '') + '：这一轮没有产生效果，停止'); break; }
         if (轮 >= 上限) { 记录(g, (item.标签 ?? '') + '：重复达到上限 ' + 上限 + ' 次，停止'); break; }
@@ -5916,7 +6480,8 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
          * · `记到` = 把选中项的 `值`（省略 = 下标）写进来源记忆，后面的步骤用 `{ 记忆: 键 }` 读。
          * 答复走 `本次选择`（应用选择 对「选」类不推进游标 → 本步重跑一次把它用掉）。
          */
-        const 步 = 步骤 as { 标签?: string; 记到?: 记到规格; 选项: { 标签: string; 值?: string | number; 效应?: ResolveStep[] }[] };
+        const 步 = 步骤 as { 标签?: string; 玩家?: 玩家指向; 记到?: 记到规格; 选项: { 标签: string; 值?: string | number; 效应?: ResolveStep[] }[] };
+        const 选者 = 步.玩家 !== undefined ? (解析玩家们(g, item, 步.玩家)[0] ?? item.操控者) : item.操控者;
         let 下标: number | undefined;
         if (item.本次选择 !== undefined) {
           const 键 = item.本次选择[0];
@@ -5925,7 +6490,7 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
         }
         if (下标 === undefined) {
           item.待选择 = {
-            类型: '选', 选什么: '选项', 玩家: item.操控者,
+            类型: '选', 选什么: '选项', 玩家: 选者,
             标签: 步.标签 ?? '选择一项', 数量: { 最小: 1, 最大: 1 },
             // ⚠ 键用**字符串下标**：应用选择 对数字键会当成 uid 去找物件（`找`），字符串原样留着 ✓
             候选: 步.选项.map((o, i) => ({ 键: String(i), 名称: o.标签 })),
@@ -5962,7 +6527,7 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
       const 谁 = 步骤.玩家 ?? item.操控者;
       const pl = g.players[谁]!;
       const X = typeof 步骤.数量 === 'number' ? 步骤.数量
-        : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X);
+        : 取值(g, item.操控者, 步骤.数量, item.来源 ?? undefined, 记忆宿主(item) ?? undefined, item.宣告X, item.事件);
       // 701.5b：观星 0 → **事件不发生**（因观星而触发的能力也不会触发）。
       if (X <= 0) { 记录(g, g.players[谁]!.name + ' 观星 0：事件不发生（701.5b）'); break; }
       // 101.3：没有牌可以检视 → **省略该动作**（不挂起、不问）。
@@ -6143,6 +6708,13 @@ function 付数字费待选择(g: GameState, 玩家: number, 费: number) {
   // 通用操作结果：给「选择牺牲」「支付」这类非可选、但后续要判“是否做成”的步骤用。
   const 结果键 = (步骤 as { 结果?: string }).结果;
   if (结果键 !== undefined) (item.可选结果 ??= {})[结果键] = item.上一步生效 === true;
+  // 可选步骤已经先记了 true（接受）；如果实际操作没有做成（例如横置已横置的实体），
+  // 必须把结果改回 false，否则后续「若」会误判。
+  const 步可选 = (步骤 as { 可选?: true | { 结果?: string } }).可选;
+  if (步可选 !== undefined && item.上一步生效 === false) {
+    const 可选键 = typeof 步可选 === 'object' && 步可选.结果 ? 步可选.结果 : '@可选' + item.步骤游标;
+    if (item.可选结果?.[可选键] === true) item.可选结果[可选键] = false;
+  }
   检查状态动作(g);
 }
 
@@ -6185,9 +6757,11 @@ export function 检查状态动作(g: GameState): boolean {
         // 704.5l：数术阵略**附属在不合法的物件**上、或**未附属于**任何物件或玩家 → 置入墓地。
         //   也管「所附属的那个单位离场了」——306.4c 说附属关系随离场解除，那之后就归这条收。
         //   只对**有「附属」能力**的数术判（黑水祭天那种阵略没有附属能力，不受这条管）。
-        if (关键词特征(g, o, '附属') !== undefined) {
+        if (有词(g, o, '附属')) {
           const 在 = o.附属在;
-          const 合法 = 在 !== undefined && (在 <= 1 || g.战场.some((x) => x.iid === 在));
+          const 宿主 = 在 !== undefined && 在 > 1 ? g.战场.find((x) => x.iid === 在) : undefined;
+          const 特 = 有效特征(g, o).关键词.find((k) => k.名称 === '附属')?.特征;
+          const 合法 = 在 !== undefined && (在 <= 1 || !!宿主) && (!特 || 在 <= 1 || (!!宿主 && 符合筛选(g, 宿主, 特)));
           if (!合法) { 记录(g, o.def.全名 + ' 未附属于任何合法对象（704.5l）'); 置入墓地(g, o); 本轮 = true; continue; }
         }
         // 704.5g：失去单位类别 → 移去其已损失的所有体力
@@ -6344,7 +6918,7 @@ export interface 请求 {
      */
       // ⚠ 统一【选】：待选择原样发给玩家（选物件 / 选选项 / 选阵地…），AI 也必须答 ——
     //   不答的话那一步看到「还没选」会再挂一次同一问，空转（日志里反复「X 选了 （没有）」）。
-    | { 类型: '选'; 选什么: '物件' | '选项' | '阵地' | '触发'; 标签?: string; 玩家: number;
+    | { 类型: '选'; 选什么: '物件' | '玩家' | '选项' | '阵地' | '触发'; 标签?: string; 玩家: number;
         数量?: { 最小: number; 最大: number }; 候选?: { 键: number | string; 名称: string }[];
         /** ⚠ **这次让你看的牌**（只读 ✓，服务器给的 ✓，**不是候选** ✗）—— 如开局检视 ✓ */
         查看?: { 键: number | string; 名称: string }[] };
@@ -6722,6 +7296,7 @@ export function 能发起战斗(g: GameState, p: number, u: Obj): boolean {
   if (受整备(g, u)) return false;
   if (带词(g, u, '据守')) return false;              // 702.46b：具有据守的单位不能发起战斗
   if (有自身限制(g, u, '发起战斗')) return false;      // 169 防栅「不能发起战斗」
+  if (规则禁止(g, p, '发起战斗', u)) return false;
   if ((g.本回合不能发起战斗 ?? []).some((x) => x.iid === u.iid && x.回合 === g.turn)) return false;
   return 合法攻击对象(g, p, u).length > 0;
 }
@@ -6809,14 +7384,11 @@ export function 攻击选项们(g: GameState, p: number, u: Obj): 攻击选项[]
 /** 508.2 预检：至少有一个目标组合当前付得起。 */
 export function 可宣告攻击(g: GameState, p: number, u: Obj): boolean {
   if (!能发起战斗(g, p, u)) return false;
-  return 攻击选项们(g, p, u).some((o) => 可支付数字费用(g, p, o.总费用));
+  return 攻击选项们(g, p, u).some((o) => 可支付数字费用(g, p, o.总费用, { 物件: u, 用途: '发起战斗' }));
 }
 
 /** 508：某单位宣告攻击后，把它自己那些「当此单位宣告攻击时」的触发放进待触发队列 */
 export function 排队宣告攻击触发(g: GameState, u: Obj, 受方?: number | Obj): void {
-  // 072 凌操「本回合第一个攻击的单位」/ 其它「历史 宣告攻击」都要查事件记录
-  记事件(g, '宣告攻击', { 受方: u.iid, ...(typeof 受方 === 'number' ? { 数量: 受方 } : {}) });
-  // ⚠ 同上：以前只看 u 自己 ✗；现在全场广播 ✓（「当另一个单位宣告攻击时」也认 ✓）
   排队单位事件触发(g, '宣告攻击', u, { 事件受方: 受方 });
 }
 export function* 执行战斗流程G(g: GameState, p: number, u: Obj, 期望目标?: 攻击对象): Generator<请求, void, Action | null> {
@@ -6839,7 +7411,7 @@ export function* 执行战斗流程G(g: GameState, p: number, u: Obj, 期望目�
   // 508.2a：目标与费用在 508.2 内反复选择；费用支付取消时回到目标选择。
   let 目标: 攻击对象 | undefined;
   for (;;) {
-    const 选项 = 攻击选项们(g, p, u).filter((o) => 可支付数字费用(g, p, o.总费用));
+    const 选项 = 攻击选项们(g, p, u).filter((o) => 可支付数字费用(g, p, o.总费用, { 物件: u, 用途: '发起战斗' }));
     let 选中: 攻击选项 | undefined;
     if (期望目标) 选中 = 选项.find((o) => 同一攻击对象(o.目标, 期望目标));
     else {
@@ -6909,6 +7481,7 @@ export function* 执行战斗流程G(g: GameState, p: number, u: Obj, 期望目�
   写横置(g, u, true);
   排队单位事件触发(g, '成为横置', u);
   记录(g, u.def.全名 + ' 宣告攻击 ' + 攻击对象描述(g, 目标) + '（508.2g 攻击对象已锁定）');
+  g.当前战斗 = { 进攻者: u, 攻击对象: 目标 };
   // 508.2l：触发要带上攻击对象。
   const 攻击受方 = 目标.种类 === '玩家'
     ? 目标.玩家
@@ -6967,7 +7540,7 @@ export function* 执行战斗流程G(g: GameState, p: number, u: Obj, 期望目�
   if (g.over) return;
   yield* 优先权循环G(g, 战斗时机, '战斗结束步骤');        // 510.1
   记录(g, '战斗流程结束，回到行动阶段（510.3）');
-  } finally { g.战斗中 = false; g.当前进攻者 = null; }
+  } finally { g.战斗中 = false; g.当前进攻者 = null; g.当前战斗 = undefined; }
 }
 
 /** 自动推进（AI / 无界面场合）：可选触发一律接受 */
@@ -7014,6 +7587,17 @@ function 能由启动(g: GameState, o: Obj, ab: { 可启动者?: '操控者' | '
   return true;   // '任意'
 }
 
+function 有启动时机许可(g: GameState, p: number, o: Obj, ab: ActivatedAbility): boolean {
+  const 名 = (ab as { 名称?: string }).名称;
+  return 收集规则持续(g).some(({ 来源, 操控者, 效应 }) => {
+    if (效应.类别 !== '规则修改' || 效应.作用点 !== '启动时机') return false;
+    if (效应.修饰.允许 !== '瞬发') return false;
+    if (效应.能力 && (!名 || !(名 === 效应.能力 || 名.startsWith(效应.能力)))) return false;
+    if (效应.条件 && !判断(g, 操控者, 效应.条件, 来源)) return false;
+    return !效应.适用 || 符合选择器(g, o, 效应.适用, 来源, 操控者, 有效特征(g, o));
+  });
+}
+
 export function 可用启动式能力(g: GameState, p: number, o: Obj): number[] {
   if (!有规则叙述(g, o)) return [];               // 709.2a / 层6
   // 025 魏司典 / 075 毁容：这个物件的启动式能力不能启动（层6，实时）
@@ -7032,11 +7616,12 @@ export function 可用启动式能力(g: GameState, p: number, o: Obj): number[]
     // 602.1e / 602.2：谁能启动（缺省 = 操控者；'任意' / '对手' 按数据）
     if (!能由启动(g, o, ab, p)) return;
     if (ab.限制 === '每回合一次' && 已用.includes(i)) return;
-    if (ab.时机 !== '瞬发' && !通常时机) return;
-    if (取费用步(ab.费用, '横置') && (o.tapped || (o.sick && !有词(g, o, '神速')))) return;
+    if (ab.时机 !== '瞬发' && !通常时机 && !有启动时机许可(g, p, o, ab)) return;
+    const 视同神速 = 规则许可(g, p, o, '神速', '启动能力', (ab as { 名称?: string }).名称);
+    if (取费用步(ab.费用, '横置') && (o.tapped || (o.sick && !有词(g, o, '神速') && !视同神速))) return;
     const 支付 = 支付费用(ab.费用);
     const 通用数 = 支付.宣告X ? 0 : Math.max(0, 支付.点数 + 启动费用修正(g, p, o));   // 带 X 的能力最小可付 0
-    if (通用数 && !可支付数字费用(g, p, 通用数)) return;
+    if (通用数 && !可支付数字费用(g, p, 通用数, { 物件: o, 用途: '启动能力', 能力: ab })) return;
     if (ab.条件 && !判断(g, p, ab.条件)) return;
     // 702.7b 佩带：「此能力**只可以于此装备未佩带时**启动」
     if ((ab as { 名称?: string }).名称 === '佩带' && o.佩带在 !== undefined) return;
@@ -7056,7 +7641,7 @@ export function 执行特殊动作(g: GameState, p: number, o: Obj, 索引: numb
     if (f.操作 !== '支付') { 记录(g, o.def.全名 + '：特殊动作费用含不支持的操作，跳过'); return false; }
     费 += 费用点数值(f.点数);
   }
-  if (!支付数字费用(g, p, 费, 支付源)) { 记录(g, '特殊动作支付失败：' + o.def.全名); return false; }
+  if (!支付数字费用(g, p, 费, 支付源, { 物件: o, 用途: '特殊动作' })) { 记录(g, '特殊动作支付失败：' + o.def.全名); return false; }
   const item = { id: g.nextStackId++, 种类: '特殊动作' as const, 标签: o.def.全名 + (ab.标签 ? '：' + ab.标签 : ''),
     操控者: p, 来源: o, card: null, 目标: [], 目标槽: {}, 步骤游标: 0,
     steps: (ab.效应 ?? []) as ResolveStep[] } as unknown as StackItem;
@@ -7078,6 +7663,7 @@ export function 启动能力(g: GameState, p: number, o: Obj, 索引: number, �
   // 能力自己的区域必须和现在所在区域一致（省略 = 战场）
   if (((ab as { 区域?: '战场' | '墓地' }).区域 ?? '战场') !== o.区域) return false;
   if (有效特征(g, o).不能启动能力 === true) return false;   // 025 / 075
+  if (ab.时机 !== '瞬发' && !处于通常时机(g, p) && !有启动时机许可(g, p, o, ab)) return false;
   const 目标: 目标[] = [];
   const 目标槽: Record<string, 目标> = {};
   // 700.2a / 602.2c：模式是启动的一部分；可以多选时按选项顺序展开成多个实例。
@@ -7156,7 +7742,7 @@ export function 启动能力(g: GameState, p: number, o: Obj, 索引: number, �
       case '支付': {
         // 108.3a/108.3i：费用点数要**求值**（周瑜 {X}{X} = {乘以:'X',系数:2} = 2X）
         const 通用数 = Math.max(0, 费用点数值(f.点数, 宣告X) + 启动费用修正(g, p, o));
-        if (通用数 && !支付数字费用(g, p, 通用数, 支付源)) { 记录(g, '数字费用支付失败'); 撤销(); return false; }
+        if (通用数 && !支付数字费用(g, p, 通用数, 支付源, { 物件: o, 用途: '启动能力' })) { 记录(g, '数字费用支付失败'); 撤销(); return false; }
         break;
       }
       case '横置': {

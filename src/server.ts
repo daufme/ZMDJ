@@ -19,7 +19,7 @@ import type { GameState, Obj, StackItem } from './engine/state.js';
 import { 有效势力支持度 } from './engine/engine.js';
 import { 阵地顺序, type 阵地 } from './engine/types.js';
 import {
-  新对局, 整局G, type 请求, type Action, type 目标, type 攻击对象,
+  新对局, 整局G, type 请求, type Action, type 目标, type 攻击对象, type 支付对象,
 } from './engine/engine.js';
 import { 列出合法动作 } from './engine/options.js';
 import { 解析动作, 找任意区域物件, type 线动作 } from './engine/解析动作.js';
@@ -32,6 +32,22 @@ import { 卡号, 卡图 } from './engine/types.js';
 import type {CardDef} from './engine/types.js';
 import { 需求_动作, 需求_决定, 合并同族动作, type 需求 } from './收发需求.js';
 import { AI挑动作, AI填需求 } from './engine/ai.js';
+
+/** 605.4：把当前合法动作对应的支付对象交给费用来源收集。 */
+function 动作支付对象(a: { 种类?: string; iid?: number }, g: GameState): 支付对象 | undefined {
+  const iid = Number(a.iid);
+  if (!Number.isFinite(iid)) return undefined;
+  const o = 找任意区域物件(g, iid);
+  if (!o) return undefined;
+  switch (a.种类) {
+    case '打出':
+    case '打领土': return { 物件: o, 用途: '打出' };
+    case '启动能力': return { 物件: o, 用途: '启动能力' };
+    case '特殊动作': return { 物件: o, 用途: '特殊动作' };
+    case '发起战斗': return { 物件: o, 用途: '发起战斗' };
+    default: return undefined;
+  }
+}
 
 /**
  * 按 系列配置 动态装载卡池。
@@ -567,7 +583,7 @@ function 卡(房: 房间, o: Obj, 牌面可见 = false) {
     // 静态卡面（文字/费用/图/印制值）不再每帧发：客户端用 /api/cards 的卡表补齐。
     //   暗置且无权限时不发卡号，客户端也就补不出真身。
     ...(公开 ? { 卡号: 卡号(o.def) } : {}),
-    名称: f.名称,   // 709.2a：暗置 = 「暗置领土」✓（f = 有效特征；谁都不该看到原牌名 ✗）
+    名称: f.名称,   // 709.2a：暗置没有名称（只有类别「领土」）✓（f = 有效特征；谁都不该看到原牌名 ✗）
     类别: f.类别, 副类别: f.副类别, 超类别: f.超类别,
     武力: 是类别(房.g, o, '单位') ? f.武力 : null,
     体力上限: 是类别(房.g, o, '单位') ? f.体力上限 : null,
@@ -862,12 +878,13 @@ function 视图(房: 房间, 座位: number | null = null, 从日志?: number) {
           // 打出改为两段：先开始打出，再由待完成打出生成需求。这里不再挂旧的一次性打出需求。
           ...((a.种类 === '打出' || a.种类 === '发起战斗') ? {} : {
             需求: 挂牌面(房, 需求_动作(a as unknown as Record<string, unknown>, 房.当前!.玩家,
-              可支付来源(房.g, 房.当前!.玩家) || [], 房.g), 座位),
+              可支付来源(房.g, 房.当前!.玩家, 动作支付对象(a, 房.g)) || [], 房.g), 座位),
           }),
         }))
       : [],
     // 118.2 / 304.8：支付数字费用时要让玩家自己挑启动哪几个费用能力（挑地）
-    可支付来源: 房.g.players.map((_, i) => 可支付来源(房.g, i)),
+    // 这是给客户端算“已挑来源提供点数”的表；限制已在需求候选里过滤。
+    可支付来源: 房.g.players.map((_, i) => 可支付来源(房.g, i, undefined, true)),
     /**
      * ⚠ **需要双方确认的步骤**（展示 ✓）：报"谁已经确认了" ✓ ——
      *   联机时两边各看各的 ✓；热座时一屏上两个按钮（按过的标 ✓）✓；
@@ -1013,18 +1030,17 @@ export function 应用(房: 房间, 体: 线动作, 座位: number | null = null
     if (!a) { 应用中 = 之前应用中; return { ok: false, 错误: '这张牌现在不能打出' }; }
     const item = 开始打出(房.g, p, o);
     if (!item) { 应用中 = 之前应用中; return { ok: false, 错误: '不能开始打出' }; }
-    const 需0 = 需求_动作(a as unknown as Record<string, unknown>, p, 可支付来源(房.g, p) || [], 房.g);
+    const 需0 = 需求_动作(a as unknown as Record<string, unknown>, p,
+      可支付来源(房.g, p, { 物件: o, 用途: '打出' }) || [], 房.g);
     if (!需0) { 取消打出(房.g, item); 应用中 = 之前应用中; return { ok: false, 错误: '无法生成打出需求' }; }
     for (const k of Object.keys(需0.确认后发)) if (需0.确认后发[k] === '@待完成打出') 需0.确认后发[k] = item.id;
     房.待完成打出 = { id: item.id, item, 玩家: p, 需求: 需0 };
-    记录(房.g, 房.g.players[p]!.name + ' 开始打出 ' + o.def.全名);
     推送(房); 排AI(房); 应用中 = 之前应用中;
     return { ok: true };
   }
   if (体.种类 === '取消打出') {
     if (!房.待完成打出 || Number(体.待完成打出) !== 房.待完成打出.id) { 应用中 = 之前应用中; return { ok: false, 错误: '没有这个待完成打出' }; }
     取消打出(房.g, 房.待完成打出.item);
-    记录(房.g, 房.g.players[p]!.name + ' 取消打出 ' + 房.待完成打出.item.标签);
     房.待完成打出 = undefined;
     推送(房); 排AI(房); 应用中 = 之前应用中;
     return { ok: true };
@@ -1352,8 +1368,13 @@ const 服务器 = http.createServer((req, res) => {
     发JSON(res, { ok: true, 侧, 校验: 校, 状态: 视图(房, 视图座位(座)), 池: 池视图(房) });
   });
   if (req.method === 'POST' && u === '/api/new') return 收JSON(req, (体) => {
-    const 座 = 找座位(体.令牌); const 房 = 座 ? 座.房 : null;
-    if (!房) return 发JSON(res, { ok: false, 错误: '还没入座（没有令牌或令牌已失效）' }, 400);
+    const 座 = 找座位(体.令牌);
+    if (!座) return 发JSON(res, { ok: false, 错误: '还没入座（没有令牌或令牌已失效）' }, 400);
+    const 房 = 座.房;
+    // 房主 = 1 号座位（第一个入座的人）；热座座位 -1 也允许。
+    if (座.座位 >= 0 && 座.座位 !== 0) {
+      return 发JSON(res, { ok: false, 错误: '只有房主（1号座位）能新开一局' }, 403);
+    }
     // ★ 测试阶段：**新局就覆盖对局信息** ✓（编号从 1 重新开始 ✓；服务器.log 里会有「新局」分隔行 ✓）
     对局信息重开(房);
     发牌并开局(房, Number(体.seed ?? (Date.now() % 100000)));

@@ -16,11 +16,11 @@ export function 拍可复制特征(g: GameState, 源: Obj, 例外?: 复制例外
   // 709.2a：暗置实体没有牌面名称/势力/副类别/能力；复制它时得到的是暗置领土的可复制特征。
   if (源.面 === '暗置') {
     快照 = {
-      ...快照, 称号: undefined, 名称: ['暗置领土'], 全名: '暗置领土',
+      ...快照, 称号: undefined, 名称: [], 全名: '',
       名称限定词: undefined, 修饰符: [],
       势力: null, 势力需求: { 符号: {} }, 势力支持: undefined,
       超类别: [], 类别: ['领土'], 副类别: [], 武力: undefined, 体力上限: undefined,
-      灵值: undefined, 打出费用: 0, 额外费用: undefined, 横置进场: false,
+      灵值: undefined, 打出费用: 0, 额外费用: undefined,
       现行文字: '', 能力: null,
     };
   }

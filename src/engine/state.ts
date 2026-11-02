@@ -9,7 +9,7 @@
  *   状态里塞判断逻辑的代价是「谁都能改，谁也不知道什么时候改的」。
  */
 import type { TargetSpec } from './types.js';
-import type { CardType, Faction, 筛选, 层修改, CardDef, 阵地, SupportMap, Support, Selector, 事件名, 玩家动作, ReplacementSpec, 规则动作 } from './types.js';
+import type { CardType, Faction, 筛选, 层修改, CardDef, 阵地, SupportMap, Support, Selector, 事件名, 玩家动作, ReplacementSpec, 规则动作, 规则持续效应, 事件参与者, 伤害产生方式, 事件记录, Condition } from './types.js';
 // ⚠ 循环 import：continuous.ts 也 import 本文件。ESM 的实时绑定 + 只在函数体内调用，运行时安全。
 import { 有效控制器 } from './continuous.js';
 import { 阵地顺序 } from './types.js';
@@ -131,11 +131,13 @@ export interface 连续载荷 {
   层?: 层修改;
   /** 614 / 615：改**事件**（伤害的防止与替代），在事件发生时生效 */
   替代?: ReplacementSpec;
+  /** 604/613.11：持续一段时间内改变游戏规则 */
+  规则?: 规则持续效应;
 }
 
 export interface 连续效应 {
   /** 611.2b 的「只要……」—— 条件不成立时这个效应没有任何效果（目标已解析成实例 iid） */
-  条件?: { 操作: string; 目标?: string };
+  条件?: Condition;
   id: number;
   /** 613.7b 时间印记 */
   时间印记: number;
@@ -156,7 +158,7 @@ export interface 连续效应 {
 export interface LKI {
   iid: number; uid: number; def: CardDef;
   区域: Zone; 操控者: number; 拥有者: number; 阵地: 阵地 | null;
-  名称: string; 类别: string[]; 副类别: string[]; 超类别: string[];
+  名称: string; 类别: string[]; 副类别: string[]; 超类别: string[]; 势力: import('./types.js').Faction[] | null;
   武力: number | null; 体力上限: number | null; 关键词: unknown[];
   damage: number; tapped: boolean; 面: '明置' | '暗置';
   标记: readonly unknown[]; 时间印记: number;
@@ -276,17 +278,61 @@ export interface PlayerState {
   统帅区: Obj[];
 }
 
-/** 一次触发事件（不是规则术语）：受方 = 事件承受者，数量/死者位置/来源都是同一次事件的信息 */
+/** 一次触发事件（不是规则术语）：按事件名写专用字段。 */
 export interface 触发事件 {
   事件?: string;
-  /** 事件受体/来源在事件发生时的 LKI */
-  受方快照?: LKI;
+  /** 触发源在事件发生时的 LKI */
   来源快照?: LKI;
   /** 400.7e：事件发生前后的实例号 */
   原iid?: number;
   新iid?: number;
-  /** 事件里承受它的对象：被打的玩家、进场的单位、死去的单位… */
-  受方?: number | Obj;
+  /** 死去事件的专用字段；完整 LKI */
+  死亡角色?: LKI;
+  /** 抓牌事件：谁抓、抓多少。 */
+  抓牌玩家?: number;
+  抓牌数量?: number;
+  /** 明置事件：被翻开的物件（翻面前的 LKI）、做这个动作的玩家。 */
+  明置角色?: Obj | LKI;
+  明置玩家?: number;
+  /** 暗置事件：被盖下的物件（盖下前的 LKI）、做这个动作的玩家。 */
+  暗置角色?: Obj | LKI;
+  暗置玩家?: number;
+  /** 成为横置事件：被横置的物件。 */
+  横置角色?: Obj;
+  /** 进战场事件：进场的物件。 */
+  进场角色?: Obj;
+  /** 移动事件：移动的物件。 */
+  移动角色?: Obj;
+  /** 被指定为目标事件：目标物件和指定来源。 */
+  目标?: Obj;
+  指定来源?: Obj | null;
+  /** 回复体力事件：玩家或单位，以及回复量。 */
+  回复玩家?: number;
+  回复单位?: Obj;
+  回复数量?: number;
+  /** 受到伤害事件：玩家或单位，以及伤害量。 */
+  受伤单位?: Obj;
+  受伤玩家?: number;
+  伤害数量?: number;
+  /** 宣告攻击事件：攻击者和攻击目标。 */
+  攻击者?: Obj;
+  攻击目标玩家?: number;
+  攻击目标单位?: Obj;
+  /** 造成伤害事件：来源、受方、数量、是否战斗伤害。 */
+  伤害来源?: Obj;
+  战斗伤害?: boolean;
+  /** 进入相对阵地事件：进入的物件。 */
+  进入角色?: Obj;
+  /** 步骤开始事件：开始的步骤名。 */
+  步骤?: string;
+  /** 打出牌事件：谁打出、打出的牌。 */
+  打出玩家?: number;
+  打出的牌?: Obj;
+  /** 观星事件：观星的玩家。 */
+  观星玩家?: number;
+  /** 弃牌事件：弃牌玩家和弃掉的牌。 */
+  弃牌玩家?: number;
+  弃掉的牌?: Obj;
   /** 伤害量之类 */
   数量?: number;
   /** 死去时它原来占的阵地（700.4；进墓地后 o.阵地 已清空） */
@@ -390,6 +436,8 @@ export interface StackItem {
   可选结果?: Record<string, boolean>;
   /** 正在结算的带结果可选段；结束 = 取消时要跳到的游标。 */
   可选当前?: { 结果: string; 结束: number };
+  /** 改目标：目标堆叠项 + 当前处理到第几个已有目标。 */
+  改目标?: { 栈id: number; 索引: number };
   /** 没有来源（开局那种合成链）时，记到 的值存这里 */
   记忆?: Record<string, unknown>;
   /** 708.5：这张牌进场前的复制选择已经作过（包括选择不复制）。 */
@@ -436,7 +484,7 @@ export interface StackItem {
       | {
           类型: '选';
           /** 用哪个渲染器：物件 = 点场上/手牌；选项 = 点按钮（支付/不支付、使用/不使用…） */
-  选什么: '物件' | '选项' | '阵地' | '支付源' | '攻击对象';
+  选什么: '物件' | '玩家' | '选项' | '阵地' | '支付源' | '攻击对象';
   /** 「这一步是“你可以…”」的通用门（执行一步 开头那道门）—— 用**标记**判，不靠标签文字 */
   门?: boolean;
   /** 操作级可选、且操作没有内部选择：执行/取消确认。 */
@@ -483,6 +531,24 @@ export interface TempEffect {
   武力: number;
   体力上限: number;
   expires: '直到回合结束';
+}
+
+/**
+ * 筛选主体：筛选器真正面对的对象。
+ * 目前只是统一的输入形状，后续再让 符合筛选/候选目标 按这个类型分流。
+ */
+export type 筛选主体 =
+  | { 类型: '物件'; 物件: Obj }
+  | { 类型: '堆叠项'; 堆叠项: StackItem }
+  | { 类型: '玩家'; 玩家: number }
+  | { 类型: '阵地'; 阵地: 阵地 };
+
+/** 当前这场战斗的实时上下文；只在本场战斗期间存在，战斗结束清空。 */
+export interface 战斗上下文 {
+  进攻者: Obj;
+  攻击对象:
+    | { 种类: '玩家'; 玩家: number }
+    | { 种类: '阵地'; 玩家: number; 阵地: 阵地 };
 }
 
 export interface GameState {
@@ -543,6 +609,8 @@ export interface GameState {
      */
     id?: number;
     来源: Obj; abilityIndex: number; 标签: string;
+    /** 延迟触发等需要覆盖操控者时用（603.7d/e：登记它的玩家） */
+    操控者?: number;
     /** 触发事件上下文（受方/数量/死者位置/事件来源） */
     事件?: 触发事件;
     /** 触发源在触发时的 LKI */
@@ -582,6 +650,8 @@ export interface GameState {
   判定中?: { iid: number } | null;
   /** 506-510：当前战斗的**进攻单位**（「目标进攻单位」筛选 / 060 用）；非战斗时为 null */
   当前进攻者?: Obj | null;
+  /** 当前战斗的实时上下文：攻击对象是玩家还是阵地；战斗结束后清空。 */
+  当前战斗?: 战斗上下文;
   /** 「本回合中，你可以打出该牌」的许可（045 诸葛亮）—— 回合号 + 实例 iid */
   本回合可打出?: { iid: number; 回合: number }[];
   /** 508.2d/508.2f：本回合不能再次发起战斗的单位（按当前 iid 记，回合号防跨回合）。 */
@@ -620,7 +690,7 @@ export interface GameState {
   /** 洗牌用的随机源（不参与序列化） */
   随机源: () => number;
   /**
-   * **事件记录** —— 「过去发生过什么」。历史查询（Selector.历史）查这里。
+   * **事件记录** —— 「过去发生过什么」。筛选历史条件查这里。
    *
    * ⚠ **这是个简版**：够现在用，**遇到更复杂的情况再拓展**（见 docs/02）。
    *   已知要拓展的方向：复合事件、事件之间的关系、非伤害类事件的数量、
@@ -628,7 +698,7 @@ export interface GameState {
    *
    * 清理：回合开始时丢掉「上上回合及更早」的（保留 本回合 + 上回合）。
    */
-  readonly 事件记录: readonly { 回合: number; 步骤: string; 事件: 事件名; 来源?: number; 受方?: number; 数量?: number }[];
+  readonly 事件记录: readonly 事件记录[];
   /**
    * ⚠ **状态版本** —— 由 `盖章(g)` 自增（只在 state.ts 的 mutator 里调 ✓）。
    * 派生数据（候选表 / 无能力集合 / 特征 memo）**按它作废** ✓ —— 这是唯一安全的失效依据 ✓，

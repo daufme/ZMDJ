@@ -23,7 +23,7 @@
 import type { Obj, GameState } from './state.js';
 import { 实际打出费用, 可用启动式能力, 可支付来源, 模式数组 } from './engine.js';
 import { 牌面费用值, 支付费用, 费用点数形状, 取费用步 } from './费用.js';
-import type { Action, 目标, 攻击对象 } from './engine.js';
+import type { Action, 目标, 攻击对象, 支付对象 } from './engine.js';
 import type { 阵地, 费用步 } from './types.js';
 
 /**
@@ -96,8 +96,8 @@ const 是布尔 = (v: unknown): boolean => !!取首(v);
  * ⚠ 以前这个数由**客户端**算（`已付额`）✗ —— 现在边界这里算一次，
  *   于是收发层的模板里不必有 `X` 字段，客户端也不再持有任何数值规则 ✓。
  */
-function 源提供(g: GameState, 座位: number, 源: number[]): number {
-  const 表 = 可支付来源(g, 座位);
+function 源提供(g: GameState, 座位: number, 源: number[], 对象?: 支付对象): number {
+  const 表 = 可支付来源(g, 座位, 对象);
   return 源.reduce((n, iid) => n + (表.find((x) => x.iid === iid)?.提供 ?? 0), 0);
 }
 
@@ -172,7 +172,9 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
       const 源 = 数字数组(体.支付源) ?? [];
       // 108.3a：费用带 {X} 的牌，X = **挑了几个费用源**（挑几块地就是几 ✓）——
       //   线上给了 X 就用它 ✓，没给就按支付源推导 ✓（客户端不再自己算 ✗）。
-      const X = 牌面费用值(o.def.打出费用) === 'X' ? (数字1(体.X) ?? 源提供(g, p, 源)) : 数字1(体.X);
+      const X = 牌面费用值(o.def.打出费用) === 'X'
+        ? (数字1(体.X) ?? 源提供(g, p, 源, { 物件: o, 用途: '打出' }))
+        : 数字1(体.X);
       const 需付 = 牌面费用值(o.def.打出费用) === 'X' ? (X ?? 0) : 实际打出费用(g, p, o);
       // 依赖X（095 溅血斩「费用值为 X 的目标单位」）：目标的该属性必须**严格等于**宣告的 X
       if (X !== undefined) {
@@ -245,7 +247,7 @@ export function 解析动作(g: GameState, p: number, 体: 线动作): 解析结
       // ★ X 的正确算法：挑的点数 ÷ 步进（周瑜 {X}{X} → 步进 2：挑 4 点 = X=2，需付 4 ✓）
   //   以前 `?? 源提供(...)` 直接拿点数当 X ✗ → 2X 变成"挑 N 要付 2N"，永远凑不齐 ✗
   const 费步进 = 费用点数形状(取费用步((ab as { 费用?: 费用步[] } | undefined)?.费用, '支付')?.点数).步进;
-  const 源头数 = 源提供(g, p, 源);
+  const 源头数 = 源提供(g, p, 源, { 物件: o, 用途: '启动能力' });
   const 宣告X = 数字1(体.宣告X) ?? (支付.宣告X ? Math.floor(源头数 / (费步进 > 1 ? 费步进 : 1)) : undefined);
       // ★ 费用点数可以是 Value（统一后）：数字 / 'X' / {乘以,系数} / 旧区间{最小,最大} —— 在这里求值
   const 算点 = (v: unknown): number => {

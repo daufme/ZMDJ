@@ -20,11 +20,13 @@
  *   - 层2 操控权改变与层3 描述改变目前没有效应会产生，但层位已留好
  *   - 613.8 从属系统未实现，同层一律按时间印记
  */
-import type { CardType, Faction, Supertype, 筛选, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 历史查询, 筛选比较, Value, Condition, TriggeredAbility, 玩家连续效应 } from './types.js';
+import type { CardType, Faction, Supertype, 筛选, 筛选节点, 筛选条件, 筛选属性, 层修改, Selector, StaticAbility, Ability, 关键词能力, 关键词能力条目, 事件名, 事件记录, 历史查询, 筛选比较, Value, Condition, TriggeredAbility, 玩家连续效应, 事件参与者, 伤害产生方式 } from './types.js';
 import { 牌面费用值 } from './费用.js';
-import type { GameState, Obj, StackItem } from './state.js';
+import type { GameState, Obj, StackItem, LKI } from './state.js';
 import { 相对阵地, 相邻阵地, 斜对阵地, 加事件记录, 写事件记录, 盖章 } from './state.js';
 import type { 阵地 } from './types.js';
+import { 取事件字段类型 } from './事件定义.js';
+import { 比较值 } from './比较.js';
 
 /**
  * 层系统里求一个「可能是 Value 的数值」。
@@ -47,15 +49,11 @@ function 层值(v: unknown, 来源: Obj | null, g?: GameState): number {
   }
   if ('历史' in o) {
     if (!g) return 0;
-    const 条 = o['历史'] as { 事件: string; 时段?: string; 谁的?: string; 操作?: string; 取?: string };
-    const 事件们 = g.事件记录.filter((ev) =>
-      ev.事件 === 条.事件
-      && (条.时段 !== '本回合' || ev.回合 === g.turn)
-      && (条.时段 !== '上回合' || ev.回合 === g.turn - 1)
-      && (条.时段 !== '本步骤' || (ev.回合 === g.turn && ev.步骤 === g.当前步骤))
-      && (条.谁的 === undefined || ev.受方 === (来源?.操控者 ?? 0)));
-    if ((条.操作 ?? '数量') === '数量') return 事件们.length;
-    if (条.操作 === '合计' || 条.取 === '事件量') return 事件们.reduce((n, ev) => n + Number(ev.数量 ?? 0), 0);
+    const 条 = o['历史'] as 历史查询;
+    const 事件们 = 历史事件们(g, 条, undefined, 来源?.操控者 ?? 0);
+    const 操作 = (条 as Record<string, unknown>)['操作'] ?? '数量';
+    if (操作 === '数量') return 事件们.length;
+    if (操作 === '合计' || (条 as Record<string, unknown>)['取'] === '事件量') return 历史合计(事件们);
     return 0;
   }
   // 「乘以系数」（107 黄盖「每已损失 1 点体力，便 +2 武力」= 伤害标记数 × 2）
@@ -175,7 +173,7 @@ const 关键词标记表 = new Set(['洞察', '重整', '破竹', '强进', '隐
 function 基础特征(o: Obj): 特征 {
   if (o.面 === '暗置') {
     return {
-      名称: '暗置领土', 超类别: [], 类别: ['领土'], 副类别: [],
+      名称: '', 超类别: [], 类别: ['领土'], 副类别: [],
       势力: null, 武力: 0, 体力上限: 0, 关键词: [], 失去所有能力: false, 不能重置: false, 必须发起战斗: false, 不能启动能力: false, 获得能力: [], 暗置: true, 授予动作: [],
     };
   }
@@ -193,8 +191,7 @@ function 基础特征(o: Obj): 特征 {
     //   ⚠ 不需要在卡数据里额外写一份声明：写了 能力: [{ 名称:'转移' }] 就是声明。
     关键词: ((d.能力?.能力 ?? []) as { 名称?: string; 数值?: number; 特征?: 筛选 }[])
       .filter((ab) => ab.名称 !== undefined && 能解析(ab.名称))
-      // ⚠ `特征` 也要带上（702.2 抵抗 / 702.5 附属那种**带特征参数**的关键词）。
-      //   漏了它，印制的抵抗会退化成 702.2d 的「万物抵抗」—— 拦得比该拦的多。
+      // ⚠ `特征` 也要带上（702.2 抵抗 / 702.5 附属）。
       .map((ab) => ({ 名称: ab.名称!, ...(ab.数值 !== undefined ? { 数值: ab.数值 } : {}), ...(ab.特征 !== undefined ? { 特征: ab.特征 } : {}), 印制: true })),
     失去所有能力: false,
     不能重置: false,
@@ -369,7 +366,7 @@ export const 关键词解析表: Record<string, (n: number | Value) => Ability> 
   // 702.12b 突击 N：「当此单位移动时，该单位对其**相对单位**造成 N 点伤害」
   //   702.12c：转移 / 交换位置 / 任何效应造成的移动都算 —— 所以挂的是通用的「移动」事件
   突击: (n) => ({
-    种类: '触发式', 触发: { 事件: '移动', 主体: '自身' },
+    种类: '触发式', 触发: { 事件: '移动', 移动角色: '自身' },
     标签: '突击' + n,
     效应: [{ 操作: '伤害', 来源: '自身', 事件: [{ 受方: { selectRelation: '相对' }, 点数: n }] }],
   } as unknown as Ability),
@@ -381,6 +378,7 @@ export const 关键词解析表: Record<string, (n: number | Value) => Ability> 
   // 702.37b 重整：「你的结束步骤开始时，重置此单位并将体力回复至上限」
   重整: () => ({
     种类: '触发式', 触发: { 事件: '步骤开始', 步骤: '结束步骤' },
+    条件: { 操作: '回合是', 谁的: '你' },
     效应: [{ 操作: '重置', 目标: { ref: '自身' } }, { 操作: '回复', 目标: { ref: '自身' } }],
   } as unknown as Ability),
   // 下面这些 702 章都说是**静止式能力**，而且没有额外字段 —— 引擎在各自的规则点按名字查
@@ -440,7 +438,7 @@ export function 能解析(名称: string): boolean {
  */
 /** 702.77c 外交：只要操控具特征的非领土实体，此物件便具有关联能力 */
 function 外交条件(特征?: 筛选): Condition {
-  return { 操作: '存在', 筛选: [
+  return { 筛选: [
     { 属性: '区域', 值: '战场' },
     { 属性: '操控者', 值: '你' },
     { 属性: '类别', 比较: '不是', 值: '领土' },
@@ -449,7 +447,7 @@ function 外交条件(特征?: 筛选): Condition {
 }
 
 function 合并条件(a?: Condition, b?: Condition): Condition | undefined {
-  if (a && b) return { 操作: '与', 参数: [a, b] };
+  if (a && b) return { 与: [a, b] };
   return a ?? b;
 }
 
@@ -460,11 +458,7 @@ function 加外交条件(ab: Ability, cond: Condition): Ability {
     return { 种类: '静止式', 效应: [{ 类别: '物件持续', 范围: { 筛选: [{ 属性: '区域', 值: '战场' }, { 属性: '种类', 值: '单位' }, { 属性: '自身' }] }, 层: { 获得关键词: [ab as 关键词能力] }, 条件: cond }] } as unknown as Ability;
   }
   if (有种类 === '触发式') {
-    const t = ab as TriggeredAbility;
-    if ('任一' in t.触发) {
-      return { ...t, 触发: { 任一: t.触发.任一.map((x) => ({ ...x, 条件: 合并条件(cond, x.条件) })) } } as unknown as Ability;
-    }
-    return { ...t, 触发: { ...t.触发, 条件: 合并条件(cond, t.触发.条件) } } as unknown as Ability;
+    return ab;
   }
   if (有种类 === '静止式') {
     const s = ab as StaticAbility;
@@ -530,35 +524,195 @@ export function 关键词数值(g: GameState, o: Obj, 名: string): number {
  * 「沟通成本低」的原因：**登记点就是触发式能力已经在用的那批钩子**。
  * ⚠ 简版：只记 事件/来源/受方/数量。要拓展时见 docs/02 的说明。
  */
-export function 记事件(g: GameState, 事件: 事件名, x: { 来源?: number; 受方?: number; 数量?: number }): void {
-  加事件记录(g, { 回合: g.turn, 步骤: g.当前步骤, 事件, ...x });
+export function 记事件(g: GameState, 事件: 事件名, 数据: Record<string, unknown> = {}): void {
+  加事件记录(g, { ...数据, 回合: g.turn, 步骤: g.当前步骤, 事件 });
 }
 
-/**
- * **历史查询查询** —— 这个实体过去有没有发生过这件事（Selector.历史 用）。
- * 四个部件：**事件 × 角色 × 时段 × 数量**。
- */
-export function 发生过(g: GameState, o: Obj, 条: 历史查询): boolean {
-  return g.事件记录.some((e) =>
-    e.事件 === 条.事件
-    && (条.时段 === undefined
-      || (条.时段 === '本回合' && e.回合 === g.turn)
-      || (条.时段 === '上回合' && e.回合 === g.turn - 1)
-      || (条.时段 === '本步骤' && e.回合 === g.turn && e.步骤 === g.当前步骤))
-    // 角色：省略 = **这个实体在任一边**（不是「不检查实体」）
-    && (条.角色 === '来源' ? e.来源 === o.iid
-      : 条.角色 === '受方' ? e.受方 === o.iid
-        : e.来源 === o.iid || e.受方 === o.iid)
-    && (条.数量 === undefined || 数量比较(e.数量 ?? 0, 条.数量)),
-  );
+const 历史查询元字段 = new Set(['事件', '时段', '次数', '角色', '谁的', '筛选', '对象', '操作', '取']);
+
+/** 事件记录里的 iid 找当前物件。 */
+function 找历史物(g: GameState, iid: number): Obj | undefined {
+  return g.战场.find((x) => x.iid === iid)
+    ?? g.stack.map((s) => s.card).find((x): x is Obj => !!x && x.iid === iid)
+    ?? g.players.flatMap((pl) => [...pl.hand, ...pl.library, ...pl.graveyard]).find((x) => x.iid === iid)
+    ?? g.放逐区.find((x) => x.iid === iid);
 }
-/** 数量比较（复用 筛选比较） */
-function 数量比较(实际: number, c: { 比较: 筛选比较; 值: number }): boolean {
-  if (c.比较 === '大于') return 实际 > c.值;
-  if (c.比较 === '小于') return 实际 < c.值;
-  if (c.比较 === '小于等于') return 实际 <= c.值;
-  if (c.比较 === '大于等于') return 实际 >= c.值;
-  return 实际 === c.值;
+
+/** '主体' 指向的条件主体号：物件取 iid，玩家直接用座位号。 */
+function 历史主体号(主体: Obj | number | undefined): number | undefined {
+  return 主体 === undefined ? undefined : typeof 主体 === 'number' ? 主体 : 主体.iid;
+}
+
+/** 事件里的受方是物件 iid 就取有效操控者，是玩家号就直接用。 */
+function 历史控制者(g: GameState, 值: unknown): number | undefined {
+  if (typeof 值 !== 'number') return undefined;
+  const 物 = 找历史物(g, 值);
+  if (物) return 有效控制器(g, 物);
+  return g.players.some((p) => p.index === 值) ? 值 : undefined;
+}
+
+/** 事件字段比较：默认相等，其余按筛选比较。 */
+function 历史比较(实际: unknown, 比较: 筛选比较 | undefined, 值: unknown): boolean {
+  return 比较值(实际, 比较, 值);
+}
+
+function 是物件快照(v: unknown): v is LKI {
+  return !!v && typeof v === 'object' && 'uid' in v && 'iid' in v && 'def' in v;
+}
+
+function 历史对象号(v: unknown): number | undefined {
+  if (typeof v === 'number') return v;
+  if (是物件快照(v)) return v.uid;
+  if (v && typeof v === 'object' && 'uid' in v && typeof (v as { uid: unknown }).uid === 'number') {
+    return (v as { uid: number }).uid;
+  }
+  return undefined;
+}
+
+function 快照特征(p: LKI): 特征 {
+  return {
+    名称: p.名称,
+    超类别: p.超类别 as Supertype[],
+    类别: p.类别 as CardType[],
+    副类别: p.副类别,
+    势力: p.势力,
+    武力: p.武力 ?? 0,
+    体力上限: p.体力上限 ?? 0,
+    关键词: p.关键词 as 关键词能力条目[],
+    不能重置: false,
+    必须发起战斗: false,
+    不能启动能力: false,
+    获得能力: [],
+    失去所有能力: false,
+    暗置: p.面 === '暗置',
+    授予动作: [],
+  };
+}
+
+/** 一个事件记录字段是否满足条件。'主体' = 当前主体，'来源' = 效应来源。 */
+function 历史字段符合(g: GameState, 事件: string, 字段: string, 实际: unknown, 条件: unknown,
+  主体: Obj | number | undefined, 控制器: number, 来源?: Obj): boolean {
+  const 类型 = 取事件字段类型(事件, 字段);
+  if (!类型) return false;
+  if (条件 && typeof 条件 === 'object' && !Array.isArray(条件)) {
+    const c = 条件 as Record<string, unknown>;
+    if ('筛选' in c) {
+      if (类型 === '物件') {
+        if (!是物件快照(实际)) return false;
+        return 符合筛选(g, 实际 as unknown as Obj, c.筛选 as 筛选, 快照特征(实际), undefined, undefined,
+          主体 && typeof 主体 !== 'number' ? 主体 : null, 控制器);
+      }
+      if (类型 === '玩家') {
+        if (typeof 实际 !== 'number') return false;
+        return 符合域({ g, 控制器, 锚: 主体 && typeof 主体 !== 'number' ? 主体 : null },
+          实际, '玩家', c.筛选 as 筛选);
+      }
+      return false;
+    }
+    if ('比较' in c || '值' in c) {
+      const 实 = 类型 === '物件' ? 历史对象号(实际) : 实际;
+      const 值 = 类型 === '物件' ? 历史对象号(c.值) : c.值;
+      return 历史比较(实, c.比较 as 筛选比较 | undefined, 值);
+    }
+    return false;
+  }
+  if (类型 === '物件') {
+    const 实号 = 历史对象号(实际);
+    if (实号 === undefined) return false;
+    if (条件 === '主体') return typeof 主体 !== 'number' && 主体 !== undefined && 实号 === 主体.uid;
+    if (条件 === '来源') return !!来源 && 实号 === 来源.uid;
+    return 历史对象号(条件) === 实号;
+  }
+  if (类型 === '玩家') {
+    if (typeof 实际 !== 'number') return false;
+    const 期望 = 条件 === '主体' ? (typeof 主体 === 'number' ? 主体 : undefined)
+      : 条件 === '来源' ? (来源 ? 有效控制器(g, 来源) : undefined)
+      : 条件 === '你' ? 控制器
+      : 条件 === '对手' ? g.players.find((p) => p.index !== 控制器)?.index
+      : 条件;
+    return 实际 === 期望;
+  }
+  if (条件 === '主体' || 条件 === '来源') return false;
+  const 期望 = 条件 === '你' ? 控制器
+    : 条件 === '对手' ? g.players.find((p) => p.index !== 控制器)?.index
+    : 条件;
+  return 历史比较(实际, undefined, 期望);
+}
+
+/** 一条事件记录是否命中查询。 */
+function 历史记录符合(g: GameState, e: 事件记录, 条: 历史查询, 主体: Obj | number | undefined, 控制器: number, 来源?: Obj): boolean {
+  const 事件们 = Array.isArray(条.事件) ? 条.事件 : [条.事件];
+  if (!事件们.includes(e.事件)) return false;
+  if (条.时段 === '本回合' && e.回合 !== g.turn) return false;
+  if (条.时段 === '上回合' && e.回合 !== g.turn - 1) return false;
+  if (条.时段 === '本步骤' && (e.回合 !== g.turn || e.步骤 !== g.当前步骤)) return false;
+  const 数据 = e as unknown as Record<string, unknown>;
+  const 条记录 = 条 as Record<string, unknown>;
+  const 伤害 = e.事件 === '对单位造成伤害' || e.事件 === '对玩家造成伤害';
+  const 来源字段 = 伤害 ? '伤害来源' : '来源';
+  const 受方字段 = 伤害 ? '受伤单位' : '受方';
+  const 受方玩家字段 = 伤害 ? '受伤玩家' : '受方';
+  const 主体号 = 历史主体号(主体);
+  // 旧查询的角色条件：只按“主体”匹配来源或受方。
+  const 角色 = 条记录['角色'];
+  if (角色 !== undefined && 主体号 !== undefined) {
+    const 源 = 数据[来源字段];
+    const 受 = 数据[受方字段] ?? 数据[受方玩家字段];
+    if (角色 === '来源' ? 源 !== 主体号 : 受 !== 主体号) return false;
+  }
+  // 旧查询的“谁的”：按受方的有效操控者判断。
+  const 谁 = 条记录['谁的'];
+  if (谁 !== undefined) {
+    const 受 = 伤害 ? (数据['受伤玩家'] ?? 数据['受伤单位']) : 数据['受方'];
+    const 控 = 历史控制者(g, 受);
+    if (控 === undefined) return false;
+    if (谁 === '你' ? 控 !== 控制器 : 控 === 控制器) return false;
+  }
+  // 旧查询的“筛选”：筛事件受方那个物件。
+  const 筛 = 条记录['筛选'];
+  if (筛 !== undefined) {
+    const 受 = 伤害 ? 数据['受伤单位'] : 数据['受方'];
+    const 物 = typeof 受 === 'number' ? 找历史物(g, 受) : undefined;
+    if (!物 || !符合筛选(g, 物, 筛 as 筛选, undefined, undefined, undefined,
+      主体 && typeof 主体 !== 'number' ? 主体 : null, 控制器)) return false;
+  }
+  // 其余键就是事件记录上的字段，条件直接套在该字段上。
+  for (const [键, 条件] of Object.entries(条)) {
+    if (历史查询元字段.has(键)) continue;
+    let 实际 = 数据[键];
+    if (键 === '数量' && 伤害 && 实际 === undefined) 实际 = 数据['伤害数量'];
+    if (!历史字段符合(g, String(e.事件), 键, 实际, 条件, 主体, 控制器, 来源)) return false;
+  }
+  return true;
+}
+
+/** 所有命中的事件记录。历史条件、数值合计、筛选共用这一条路径。 */
+export function 历史事件们(g: GameState, 条: 历史查询, 主体?: Obj | number, 控制器?: number, 来源?: Obj): 事件记录[] {
+  const 控 = 控制器 ?? (主体 && typeof 主体 !== 'number' ? 主体.操控者 : 0);
+  return g.事件记录.filter((e) => 历史记录符合(g, e, 条, 主体, 控, 来源));
+}
+
+/** 历史事件的数量合计：按事件读自己的数量字段。 */
+export function 历史合计(事件们: readonly 事件记录[]): number {
+  const 字段 = (事件: string): string => {
+    if (事件 === '对单位造成伤害' || 事件 === '对玩家造成伤害') return '伤害数量';
+    if (事件 === '抓牌') return '抓牌数量';
+    if (事件 === '失去体力') return '失去体力数量';
+    if (事件 === '玩家回血' || 事件 === '单位回血') return '回复数量';
+    return '数量';
+  };
+  return 事件们.reduce((n, e) => {
+    const 数据 = e as unknown as Record<string, unknown>;
+    return n + Number(数据[字段(String(e.事件))] ?? 0);
+  }, 0);
+}
+
+/** 历史条件：默认判断“存在”；写 次数 时比较匹配记录条数。 */
+export function 发生过(g: GameState, o: Obj | undefined, 条: 历史查询, 控制器?: number, 来源?: Obj): boolean {
+  const 数 = 历史事件们(g, 条, o, 控制器, 来源).length;
+  if (条.次数 === undefined) return 数 > 0;
+  if (typeof 条.次数 === 'number') return 数 === 条.次数;
+  return 历史比较(数, 条.次数.比较 ?? '是', 条.次数.值);
 }
 
 /**
@@ -569,12 +723,6 @@ function 数量比较(实际: number, c: { 比较: 筛选比较; 值: number }):
 export function 符合选择器(g: GameState, o: Obj, sel: Selector | undefined, 锚: Obj | null, 控制器: number, f: 特征, 触发受方?: Obj | number, 记忆源?: Obj): boolean {
   if (!sel) return true;
   const 条件: 筛选 = sel.筛选 ?? [];
-  /**
-   * ★ **B 阶段 2**：Selector 的顶层字段**翻译成 `筛选` 条件** ✓，判定**只有一条路**（`符合筛选` ✓）。
-   *   ⚠ `历史` 不是筛选属性（它查引擎的事件记录 ✓）→ 仍然单独判 ✓，不混进来 ✗。
-   */
-  // 历史查询  // 历史查询（「本回合受到过伤害的」…）—— 查引擎的事件记录，不属于"特征筛选" ✗
-  if (sel.历史 && !sel.历史.every((c) => 发生过(g, o, c))) return false;
   return 符合筛选(g, o, 条件, f, undefined, 记忆源, 锚, 控制器, 触发受方);
 }
 
@@ -597,6 +745,10 @@ const 算操控权中 = new Set<number>();
  */
 
 export function 有效控制器(g: GameState, o: Obj): number {
+  // 历史 LKI 不是活物件，不能进层计算；操控者直接读快照。
+  if (!('sick' in (o as unknown as Record<string, unknown>))) {
+    return (o as unknown as { 操控者: number }).操控者;
+  }
   if (o.区域 !== '战场') return o.操控者;
   // ⚠ 递归保护：算操控权要 计算特征 → 符合选择器 → 又可能问操控权。
   //   同一个物件在算的过程中直接返回基础值（此时它就是「还没被改过」的）。
@@ -642,15 +794,11 @@ export type 条件判断 = (c: unknown) => boolean;
 
 /**
  * **611.2b「只要……」条件成立吗**。
- * 条件在结算时已经把目标**解析成实例 iid** 了（见 持续 操作），所以这里不需要 StackItem。
- * 内建认识 `附属在`（306.4b）；别的形状交给调用方传的 `判断` 回调。
+ * 条件在结算时已经把目标解析成实例 iid 了（见 持续 操作），所以这里不需要 StackItem。
+ * 具体形状交给调用方传的 `判断` 回调。
  */
 function 条件成立(g: GameState, o: Obj, 条件: unknown, 来源: Obj | null, 判断?: 条件判断): boolean {
-  const c = 条件 as { 操作?: string; 目标?: string };
-  // ⚠ 「降服**附属于该单位**」说的是**效应的来源**（降服），不是被影响的物件（单位）——
-  //   一开始写成检查 o，结果永远不成立。条件问的是「来源现在的状态」。
-  if (c.操作 === '附属在') return 来源?.附属在 !== undefined && 来源.附属在 === Number(c.目标);
-  return 判断 ? 判断(条件) : true;   // 不认识的形状：不拦（宁可宽松，也不要静默失效）
+  return 判断 ? 判断(条件) : true;
 }
 
 /**
@@ -743,6 +891,7 @@ function 取特征值(g: GameState | undefined, o: Obj, a: 筛选属性, f: 特�
   }
 }
 
+/** 集合比较：单值视为单元素集合；是 = 有交，不是 = 无交。 */
 /** 单个条件的比较 —— 值由 c.印制 决定取哪一边 */
 function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, 记忆源?: Obj,
   锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number, 锚阵地?: 阵地 | null, 锚操控者?: number): boolean {
@@ -755,7 +904,6 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
     case '所附属': return !!锚 && 锚.附属在 !== undefined && 锚.附属在 === o.iid;
     case '所佩带': return !!锚 && 锚.佩带在 !== undefined && 锚.佩带在 === o.iid;
     case '种类': return 符合种类0(String(c.值 ?? ''));
-    case '非种类': return !符合种类0(String(c.值 ?? ''));
     case '相对阵地为空': {
       const 对面 = o.阵地 ? g.players[1 - 有效控制器(g, o)]?.阵地[相对阵地(o.阵地)!] : null;
       /**
@@ -811,22 +959,16 @@ function 符合一个条件(g: GameState, o: Obj, c: 筛选条件, f: 特征, �
     default: break;
   }
   const 有的 = c.印制 ? 取印制值(o, c.属性) : 取特征值(g, o, c.属性, f);
-  // 「值」可以是**记住**下来的数（074 一夫当关「武力小于**该单位**」= 先记住它的武力）
-  const 解一 = (v: unknown): string | number => (v && typeof v === 'object' && '记忆' in v)
-    ? Number(记忆源?.记忆[String((v as { 记忆: string }).记忆)] ?? 0) : (v as string | number);
-  const 值列: (string | number)[] = (c.值 === undefined ? [] : (Array.isArray(c.值) ? c.值 : [c.值])).map(解一);
-  switch (c.比较 ?? '是') {
-    case '是': return 值列.length === 0 ? 有的.length > 0 : 值列.some((v) => 有的.includes(v));
-    case '不是': return !值列.some((v) => 有的.includes(v));
-    case '包含': return 值列.some((v) => 有的.some((x) => String(x).includes(String(v))));
-    case '不含': return !值列.some((v) => 有的.some((x) => String(x).includes(String(v))));
-    case '大于': return 有的.some((x) => typeof x === 'number' && typeof 值列[0] === 'number' && x > 值列[0]);
-    case '小于': return 有的.some((x) => typeof x === 'number' && typeof 值列[0] === 'number' && x < 值列[0]);
-    // 128 张宝「费用值**小于等于**2」—— 不要拿「小于 3」凑，那是同一件事的第二种写法
-    case '小于等于': return 有的.some((x) => typeof x === 'number' && typeof 值列[0] === 'number' && x <= 值列[0]);
-    case '大于等于': return 有的.some((x) => typeof x === 'number' && typeof 值列[0] === 'number' && x >= 值列[0]);
-    default: return false;
-  }
+  // 「值」可以是**记住**下来的值（074 一夫当关「武力小于**该单位**」= 先记住它的武力）
+  const 解一 = (v: unknown): unknown => (v && typeof v === 'object' && '记忆' in v)
+    ? (记忆源?.记忆[String((v as { 记忆: string }).记忆)] ?? 0) : v;
+  const 值列: (string | number)[] = (c.值 === undefined ? [] : (Array.isArray(c.值) ? c.值 : [c.值]))
+    .flatMap((v) => {
+      const x = 解一(v);
+      return Array.isArray(x) ? x : [x];
+    })
+    .filter((x): x is string | number => typeof x === 'string' || typeof x === 'number');
+  return 比较值(有的, c.比较, 值列);
 }
 
 /**
@@ -865,17 +1007,7 @@ export interface 判定上下文 {
 }
 
 function 比较数或值(有的: number | string, c: 筛选条件): boolean {
-  const 比较 = c.比较 ?? '是';
-  const 列 = Array.isArray(c.值) ? c.值 : [c.值];
-  switch (比较) {
-    case '是': return 列.some((v) => String(v) === String(有的));
-    case '不是': return !列.some((v) => String(v) === String(有的));
-    case '大于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 > v);
-    case '大于等于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 >= v);
-    case '小于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 < v);
-    case '小于等于': return 列.some((v) => typeof v === 'number' && typeof 有的 === 'number' && 有的 <= v);
-    default: return false;
-  }
+  return 比较值(有的, c.比较, c.值);
 }
 
 function 符合玩家条件(ctx: 判定上下文, p: number, c: 筛选条件): boolean {
@@ -928,15 +1060,29 @@ export function 符合域(ctx: 判定上下文, 主体: Obj | number | 阵地, �
   if (域 === '物件') {
     return 符合筛选(ctx.g, 主体 as Obj, 条件, ctx.特征, undefined, ctx.记忆源, ctx.锚 ?? null, ctx.控制器, ctx.触发受方, ctx.锚阵地, ctx.锚操控者);
   }
-  if (域 === '玩家') return 条件.every((c) => 符合玩家条件(ctx, 主体 as number, c));
-  return 条件.every((c) => 符合阵地条件(ctx, 主体 as 阵地, c));
+  const 符合节点 = (n: 筛选节点): boolean => {
+    if ('与' in n) return n.与.every(符合节点);
+    if ('或' in n) return n.或.some(符合节点);
+    if ('非' in n) return !符合节点(n.非);
+    if ('历史' in n) return false;   // 玩家/阵地历史暂未接入
+    if (域 === '玩家') return 符合玩家条件(ctx, 主体 as number, n);
+    return 符合阵地条件(ctx, 主体 as 阵地, n);
+  };
+  return 条件.every(符合节点);
 }
 
 export function 符合筛选(g: GameState, o: Obj, 条件表?: 筛选, f?: 特征, 判断?: 条件判断, 记忆源?: Obj,
   锚?: Obj | null, 控制器?: number, 触发受方?: Obj | number, 锚阵地?: 阵地 | null, 锚操控者?: number): boolean {
   if (!条件表 || 条件表.length === 0) return true;
   const 特征 = f ?? 计算特征(g, o, 判断);
-  return 条件表.every((c) => 符合一个条件(g, o, c, 特征, 记忆源, 锚, 控制器, 触发受方, 锚阵地, 锚操控者));
+  const 符合节点 = (n: 筛选节点): boolean => {
+    if ('与' in n) return n.与.every(符合节点);
+    if ('或' in n) return n.或.some(符合节点);
+    if ('非' in n) return !符合节点(n.非);
+    if ('历史' in n) return 发生过(g, o, n.历史, 控制器);
+    return 符合一个条件(g, o, n, 特征, 记忆源, 锚, 控制器, 触发受方, 锚阵地, 锚操控者);
+  };
+  return 条件表.every(符合节点);
 }
 
 /**

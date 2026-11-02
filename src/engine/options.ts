@@ -128,7 +128,7 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       }
       // 304.4b：不是领土牌也能暗置打出，成为一个暗置领土
       if (能打出领土(g, p, o, '暗置')) {
-        out.push({ 种类: '打领土', iid: o.iid, 面: '暗置', 标签: '暗置打出 ' + o.def.全名 + '（作为暗置领土）' });
+        out.push({ 种类: '打领土', iid: o.iid, 面: '暗置', 标签: '暗置打出 ' + o.def.全名 });
       }
     }
   }
@@ -172,7 +172,7 @@ export function 列出合法动作(g: GameState, p: number, opts: 时机选项):
       return typeof v === 'number' ? v : 0;   // 108.3g：带 X 的牌在堆叠外 X 视同 0
     };
     // 604：**实际费用**（含费用修正，例如【李典】的加价）—— 客户端照它决定要挑几块地
-    if (!可支付数字费用(g, p, (是X ? 0 : 实际打出费用(g, p, o)) + 额外支付)) continue;
+    if (!可支付数字费用(g, p, (是X ? 0 : 实际打出费用(g, p, o)) + 额外支付, { 物件: o, 用途: '打出' })) continue;
     const 目标规格: { 目标名: string; 数量: { 最小: number; 最大: number }; 候选: 候选[];
       依赖?: string; 按锚?: Record<string, (number | string)[]>;
       /** 本槽候选的该属性必须等于本牌宣告的 X（095）；候选项带 `需X`，客户端按已选 X 过滤 */
